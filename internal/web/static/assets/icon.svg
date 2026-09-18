@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Timeblaster">
+  <rect width="512" height="512" rx="96" fill="#07090a"/>
+  <rect x="56" y="140" width="400" height="232" rx="28" fill="#101512" stroke="#223026" stroke-width="8"/>
+  <g fill="#33ff33" font-family="ui-monospace, Menlo, monospace" font-size="132" font-weight="700" text-anchor="middle">
+    <text x="256" y="302">6:30</text>
+  </g>
+  <circle cx="126" cy="410" r="26" fill="#ff4444"/>
+  <circle cx="256" cy="410" r="18" fill="#1faa1f"/>
+  <circle cx="386" cy="410" r="18" fill="#1faa1f"/>
+</svg>

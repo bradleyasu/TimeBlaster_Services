@@ -1,0 +1,27 @@
+# Build output
+bin/
+*.exe
+/timeblasterd
+/timeblaster-wifi
+/tbctl
+
+# Local development scratch: `make dev` creates this.
+.dev/
+
+# Test and coverage artefacts
+coverage.out
+coverage.html
+*.test
+
+# Editor and OS noise
+.DS_Store
+*.swp
+*~
+.idea/
+.vscode/
+
+# Never commit a real database or a user's sound files.
+*.db
+*.db-wal
+*.db-shm
+deploy/sounds/

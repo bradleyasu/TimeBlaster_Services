@@ -1,0 +1,23 @@
+<?xml version="1.0" standalone='no'?>
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<!--
+  Advertises the Timeblaster companion app over mDNS.
+
+  Avahi already publishes the host's A record as <hostname>.local, which is what
+  makes http://timeblaster.local work and what the NFC tag will contain. This
+  file additionally advertises the HTTP service itself, so the device shows up in
+  network browsers and "Bonjour"-aware tools rather than only resolving by name.
+
+  The port here must match web.listen_address in timeblaster.toml; setup.sh
+  rewrites it to match.
+-->
+<service-group>
+  <name replace-wildcards="yes">Timeblaster on %h</name>
+
+  <service>
+    <type>_http._tcp</type>
+    <port>8080</port>
+    <txt-record>path=/</txt-record>
+    <txt-record>product=Timeblaster</txt-record>
+  </service>
+</service-group>

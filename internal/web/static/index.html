@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0f0b">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Timeblaster">
+<title>Timeblaster</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="assets/icon-180.png">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">TIMEBLASTER</div>
+  <div class="conn" id="conn" title="Connection to the Timeblaster">●</div>
+</header>
+
+<main>
+  <!-- The ringing-alarm banner takes over the top of the screen, because when it
+       is showing there is exactly one thing the user wants to do. -->
+  <section class="ringing" id="ringing" hidden>
+    <div class="ringing-label" id="ringing-label">ALARM</div>
+    <div class="ringing-buttons">
+      <button class="btn danger" id="btn-dismiss">DISMISS</button>
+      <button class="btn" id="btn-snooze">SNOOZE</button>
+    </div>
+  </section>
+
+  <section class="clock-panel">
+    <div class="clock" id="clock">--:--</div>
+    <div class="clock-sub" id="clock-sub">&nbsp;</div>
+    <div class="clock-next" id="next-alarm">No alarms scheduled</div>
+  </section>
+
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-tab="alarms" role="tab">ALARMS</button>
+    <button class="tab" data-tab="tv" role="tab">TV</button>
+    <button class="tab" data-tab="settings" role="tab">SETTINGS</button>
+    <button class="tab" data-tab="system" role="tab">SYSTEM</button>
+  </nav>
+
+  <!-- Alarms -->
+  <section class="panel" id="tab-alarms">
+    <div class="list" id="alarm-list"></div>
+    <button class="btn wide" id="btn-add">+ NEW ALARM</button>
+  </section>
+
+  <!-- Television -->
+  <section class="panel" id="tab-tv" hidden>
+    <div class="row-head">
+      <h2>CHANNEL</h2>
+      <button class="btn small" id="btn-refresh-channels">REFRESH</button>
+    </div>
+    <p class="hint" id="tv-hint">The channel knob on the Timeblaster is authoritative. Choosing here holds until the knob is next moved.</p>
+    <div class="list" id="channel-list"></div>
+    <button class="btn wide ghost" id="btn-clear-channel">SHOW STANDBY IMAGE</button>
+  </section>
+
+  <!-- Settings -->
+  <section class="panel" id="tab-settings" hidden>
+    <label class="field">
+      <span>Timezone</span>
+      <input type="text" id="set-timezone" placeholder="America/New_York" autocapitalize="none" autocorrect="off">
+    </label>
+    <label class="field toggle">
+      <span>24-hour clock</span>
+      <input type="checkbox" id="set-clock24">
+    </label>
+    <label class="field">
+      <span>Display brightness <b id="brightness-value">75</b>%</span>
+      <input type="range" id="set-brightness" min="0" max="100" step="5">
+    </label>
+    <label class="field">
+      <span>Default alarm sound</span>
+      <select id="set-sound"></select>
+    </label>
+    <label class="field toggle">
+      <span>Channel-change overlay</span>
+      <input type="checkbox" id="set-overlay">
+    </label>
+    <button class="btn wide" id="btn-save-settings">SAVE SETTINGS</button>
+
+    <h2>ALARM VOLUME</h2>
+    <div class="volume" id="volume-readout">--%</div>
+    <p class="hint" id="volume-hint">Set by the physical knob on the Timeblaster.</p>
+    <input type="range" id="set-volume" min="0" max="100" step="1" hidden>
+
+    <h2>ALARM SOUNDS</h2>
+    <div class="list" id="sound-list"></div>
+    <button class="btn wide ghost" id="btn-stop-preview">STOP PREVIEW</button>
+  </section>
+
+  <!-- System -->
+  <section class="panel" id="tab-system" hidden>
+    <div class="health" id="health"></div>
+    <h2>NETWORK</h2>
+    <div class="kv" id="wifi-status"></div>
+    <button class="btn wide ghost" id="btn-wifi-setup">START WI-FI SETUP</button>
+    <p class="hint">
+      The usual way to reconfigure Wi-Fi is to hold the Wi-Fi button on the Timeblaster
+      for five seconds. Starting setup from here disconnects this page.
+    </p>
+  </section>
+</main>
+
+<!-- Alarm editor -->
+<div class="sheet" id="editor" hidden>
+  <div class="sheet-inner">
+    <h2 id="editor-title">NEW ALARM</h2>
+
+    <div class="time-row">
+      <input type="number" id="ed-hour" min="0" max="23" inputmode="numeric">
+      <span>:</span>
+      <input type="number" id="ed-minute" min="0" max="59" inputmode="numeric">
+    </div>
+
+    <label class="field">
+      <span>Label</span>
+      <input type="text" id="ed-label" maxlength="64" placeholder="Wake up">
+    </label>
+
+    <div class="field">
+      <span>Repeat</span>
+      <div class="days" id="ed-days"></div>
+    </div>
+
+    <label class="field">
+      <span>Sound</span>
+      <select id="ed-sound"></select>
+    </label>
+
+    <label class="field">
+      <span>Snooze <b id="ed-snooze-value">9</b> min</span>
+      <input type="range" id="ed-snooze" min="0" max="30" step="1">
+    </label>
+
+    <label class="field">
+      <span>Stop ringing after <b id="ed-autostop-value">15</b> min</span>
+      <input type="range" id="ed-autostop" min="1" max="60" step="1">
+    </label>
+
+    <div class="sheet-buttons">
+      <button class="btn" id="ed-save">SAVE</button>
+      <button class="btn ghost" id="ed-cancel">CANCEL</button>
+      <button class="btn danger" id="ed-delete" hidden>DELETE</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+
+<script src="app.js"></script>
+</body>
+</html>

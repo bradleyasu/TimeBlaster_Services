@@ -1,0 +1,60 @@
+# Timeblaster privileged network helper.
+#
+# This is the only Timeblaster component that runs as root. It exists so that the
+# main daemon does not have to: it owns every nmcli invocation and serves the
+# captive-portal page while Wi-Fi setup mode is active.
+#
+# It never raises an access point on its own. Setup mode has exactly one entry
+# path — holding the Wi-Fi button for five seconds — and the main daemon asks for
+# it over the socket below.
+
+[Unit]
+Description=Timeblaster network helper
+Documentation=file:/usr/share/doc/timeblaster/wifi-setup.md
+After=NetworkManager.service
+Requires=NetworkManager.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/timeblaster-wifi --config /etc/timeblaster/timeblaster.toml
+
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=0
+
+KillSignal=SIGTERM
+TimeoutStopSec=60
+
+# The socket lives here and is group-owned by timeblaster, mode 0660, so the main
+# daemon can reach it and nothing else on the system can.
+RuntimeDirectory=timeblaster
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=yes
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=timeblaster-wifi
+
+# --- Hardening --------------------------------------------------------------
+# Root is required for NetworkManager and for binding port 80 on the setup
+# network. Everything not needed for that is removed.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+
+ReadWritePaths=/run/timeblaster /etc/NetworkManager
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+SystemCallArchitectures=native
+
+MemoryMax=128M
+
+[Install]
+WantedBy=multi-user.target

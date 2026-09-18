@@ -1,0 +1,50 @@
+# ErsatzTV: the media server that turns the library into live channels.
+#
+# It is deliberately its own service with its own failure domain. Timeblaster
+# treats it as optional: when it is down, restarting, or absent entirely, the
+# television shows the standby image and the alarm clock is completely
+# unaffected. Nothing here should ever be made to depend on timeblaster.service,
+# and timeblaster.service must never Require this one.
+
+[Unit]
+Description=ErsatzTV
+Documentation=https://ersatztv.org/docs/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ersatztv
+Group=ersatztv
+WorkingDirectory=/opt/ersatztv
+
+# ErsatzTV keeps its database and transcode scratch space here.
+Environment=ERSATZTV_BASE_DIRECTORY=/var/lib/ersatztv
+Environment=ERSATZTV_TRANSCODE_DIRECTORY=/var/lib/ersatztv/transcode
+Environment=DOTNET_BUNDLE_EXTRACT_BASE_DIR=/var/lib/ersatztv/.net
+
+ExecStart=/opt/ersatztv/ErsatzTV
+
+Restart=on-failure
+RestartSec=10
+
+StateDirectory=ersatztv
+StateDirectoryMode=0750
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ersatztv
+
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=yes
+PrivateTmp=yes
+
+# FFmpeg transcodes can be heavy; keep them from starving the alarm clock, which
+# runs at a better nice level.
+Nice=5
+IOSchedulingClass=best-effort
+IOSchedulingPriority=5
+
+[Install]
+WantedBy=multi-user.target

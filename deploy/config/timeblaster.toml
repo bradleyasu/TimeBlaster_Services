@@ -1,0 +1,287 @@
+# Timeblaster configuration
+# =========================
+#
+# Installed to /etc/timeblaster/timeblaster.toml. setup.sh never overwrites an
+# existing copy: it writes timeblaster.toml.new alongside and tells you what
+# changed, so your edits survive a reinstall.
+#
+# Every value below is the built-in default, so a commented-out line and a
+# deleted line behave identically. Unknown keys are a startup error rather than
+# being silently ignored, which means a typo is reported instead of quietly
+# doing nothing.
+#
+# After editing:
+#   sudo timeblasterd --check-config           # validate without starting
+#   sudo systemctl restart timeblaster.service
+#   journalctl -u timeblaster.service -f
+#
+# To see the values actually in effect, defaults included:
+#   timeblasterd --print-config
+
+[general]
+# The mDNS name the device answers to: http://timeblaster.local
+hostname = "timeblaster"
+
+# IANA timezone, e.g. "America/New_York". Empty means the system timezone.
+# A timezone chosen in the companion app is stored in the database and takes
+# precedence over this, so editing here does not silently override the user.
+timezone = ""
+
+# 24-hour time in the companion app.
+clock_24h = false
+
+# 7-segment display brightness, 0-100.
+display_brightness = 75
+
+# Re-select the last channel at startup. Off by default: the channel knob is an
+# absolute-position control, so its physical position is the truth and the first
+# reading from the Nano selects the right channel within a second anyway.
+restore_channel_on_boot = false
+
+[logging]
+# debug, info, warn, error.
+level = "info"
+# "text" is logfmt, which reads well in journalctl; "json" suits log shipping.
+format = "text"
+# Log every potentiometer sample. A firehose; for bench debugging only.
+log_pot_readings = false
+
+[storage]
+database_path = "/var/lib/timeblaster/timeblaster.db"
+# Drop MP3s here. They appear in the companion app within five minutes, or
+# immediately after a service restart.
+alarm_sounds_dir = "/var/lib/timeblaster/alarm-sounds"
+# Provided by systemd's RuntimeDirectory=; holds sockets and the fallback tone.
+runtime_dir = "/run/timeblaster"
+
+[serial]
+# An explicit device path. Leave empty and use device_globs instead: /dev/ttyACM0
+# is assigned in enumeration order and moves when USB devices are replugged.
+device = ""
+
+# Tried in order until one matches. /dev/timeblaster-nano is created by the udev
+# rule installed with this package; the by-id paths work without it.
+device_globs = [
+  "/dev/timeblaster-nano",
+  "/dev/serial/by-id/*Arduino*",
+  "/dev/serial/by-id/*",
+]
+
+baud_rate = 115200
+reconnect_min_backoff = "500ms"
+reconnect_max_backoff = "15s"
+read_timeout = "2s"
+
+# How often the Pi pushes the time to the Nano. The Nano free-runs its display
+# between syncs, so this can be generous; sending the time every second would be
+# pure waste.
+time_sync_interval = "1m0s"
+
+# How long without a PING from the Nano before the link is considered dead and
+# the port is reopened.
+heartbeat_timeout = "8s"
+
+write_queue_size = 64
+
+[input]
+# Raw ADC range. The ESP32-S3 is 12-bit.
+adc_min = 0
+adc_max = 4095
+
+# Snap the outer band of pot travel to the extremes, so a knob that cannot quite
+# reach the rail still reaches 0 % and 100 %. Raise this if your pots have a
+# larger dead zone at the ends.
+end_margin_percent = 2.0
+
+# Set these if a pot is wired with its outer legs swapped and reads backwards.
+invert_channel_pot = false
+invert_volume_pot = false
+
+# Smoothing. Lower alpha smooths harder at the cost of lag.
+filter_alpha = 0.35
+# A jump this large (0.0-1.0 of full travel) is followed immediately rather than
+# smoothed, so a deliberate fast turn feels responsive.
+filter_snap_threshold = 0.08
+
+# Extra travel, as a fraction of one channel band, required to move between
+# channels. This is what stops ADC noise on a boundary flipping the channel back
+# and forth. Raise it if channels flicker; lower it if the knob feels sticky.
+channel_hysteresis = 0.25
+
+# Minimum volume change worth acting on, in percent.
+volume_deadband_percent = 2
+
+# How long the Wi-Fi button must be held to enter setup mode. This is the one and
+# only entry path to Wi-Fi setup.
+wifi_hold_duration = "5s"
+
+min_press_duration = "30ms"
+# How often a held button is checked. The poll loop only runs while a button is
+# actually down, so an idle Timeblaster does no work here at all.
+hold_poll_interval = "100ms"
+
+[audio]
+# The dedicated USB alarm speaker. NEVER left to "whatever Linux considers the
+# default", because that would send the alarm to the television.
+#
+# Accepts, in order of preference:
+#   "USB"                        a substring of the card's description
+#   "Device"                     the card's stable ALSA id
+#   "hw:CARD=Device,DEV=0"       a full ALSA device string
+#   "1"                          a card index (NOT stable across reboots)
+#
+# List the cards on the device with:  aplay -l   or   cat /proc/asound/cards
+# An empty value picks the first USB audio card, falling back to the first card.
+alarm_device = ""
+
+# The card's hardware volume control. Empty means "detect"; "none" forces
+# software volume. Inspect with: amixer -c 1 scontrols
+mixer_control = ""
+
+# Used until the volume knob reports its position. The persisted volume is
+# deliberately never replayed at startup: the physical knob is authoritative.
+startup_volume_percent = 40
+
+# Let the companion app set the volume. Even when enabled, the next movement of
+# the physical knob wins.
+allow_software_volume = false
+
+# mpv is used because it is already installed for video, plays every container a
+# user might drop in, and exposes the same JSON IPC.
+player_binary = "mpv"
+extra_player_args = []
+
+# Used by alarms that name no sound, and when a named sound is missing.
+default_sound_id = "alarm1"
+
+device_recheck_interval = "30s"
+# Caps a "test this sound" preview from the companion app.
+test_duration = "10s"
+
+[ersatztv]
+base_url = "http://127.0.0.1:8409"
+request_timeout = "5s"
+refresh_interval = "1m0s"
+# ErsatzTV takes a while to initialise after a cold boot; Timeblaster backs off
+# and keeps trying rather than failing.
+retry_min_backoff = "2s"
+retry_max_backoff = "1m0s"
+
+# mixed | hls | ts | hls-direct | segmenter | segmenter-v2 | segmenter-fmp4 | ts-legacy
+#
+# "mixed" lets ErsatzTV decide. "hls-direct" avoids transcoding when the library
+# is already H.264/AAC in MP4, which is the intended format and the lightest load
+# on the Pi — worth trying once your media is in that shape.
+stream_mode = "mixed"
+# m3u8 (HLS) or ts (MPEG-TS).
+stream_format = "m3u8"
+
+[mpv]
+binary = "mpv"
+ipc_socket = "/run/timeblaster/mpv-tv.sock"
+
+# Output options for Raspberry Pi OS Lite on a Pi 5: straight to DRM/KMS with no
+# X11 or Wayland session. Timeblaster controls mpv over the IPC socket rather
+# than restarting it on every channel change.
+#
+# If video is torn, black, or dropping frames on your television, see
+# docs/troubleshooting.md — it lists the alternative output configurations and
+# how to tell which one your setup wants.
+args = [
+  "--vo=gpu",
+  "--gpu-context=drm",
+  "--gpu-api=opengl",
+  "--hwdec=auto-safe",
+  "--fullscreen",
+  "--idle=yes",
+  "--force-window=yes",
+  "--keep-open=no",
+  "--no-input-default-bindings",
+  "--no-osc",
+  "--no-terminal",
+  "--msg-level=all=warn",
+  "--cache=yes",
+  "--demuxer-max-bytes=32MiB",
+  "--audio-device=auto",
+]
+
+# Shown fullscreen whenever no channel is selected. This is what keeps a Linux
+# console off the television.
+no_channel_image = "/usr/share/timeblaster/assets/no-channel.png"
+
+restart_min_backoff = "1s"
+restart_max_backoff = "30s"
+startup_timeout = "15s"
+command_timeout = "5s"
+
+[overlay]
+# The bright green banner shown briefly on every channel change.
+channel_overlay_enabled = true
+channel_overlay_duration = "2.5s"
+
+# A Go format string. One %s receives the channel number; a second, if present,
+# receives the channel name — so "CH %s" gives "CH 3" and "CH %s - %s" gives
+# "CH 3 - Movies".
+channel_overlay_text_format = "CH %s"
+
+# #RRGGBB. The default is a bright retro green.
+channel_overlay_color = "#33FF33"
+
+# Glyph height on a 1280x720 overlay canvas, which mpv scales to the television's
+# real resolution — so this looks the same on a 720p set and a 4K one.
+channel_overlay_font_size = 96
+
+# top-left | top-right | bottom-left | bottom-right | center
+channel_overlay_position = "top-left"
+
+# Inset from the screen edge. Increase these if your television overscans and
+# clips the banner.
+channel_overlay_margin_x = 64
+channel_overlay_margin_y = 48
+
+# Black border thickness, which keeps green text readable over bright video.
+channel_overlay_outline = 3
+
+[web]
+# host:port. Port 80 works because the unit grants CAP_NET_BIND_SERVICE, but 8080
+# is the default so the daemon needs no capability at all in the common case.
+# If you change the port, update deploy/avahi/timeblaster.service to match.
+listen_address = ":8080"
+
+read_timeout = "15s"
+write_timeout = "30s"
+shutdown_timeout = "10s"
+
+# Serve the companion app from disk instead of the copy embedded in the binary.
+# For front-end development only; empty means "use the embedded assets".
+static_dir = ""
+
+websocket_ping_interval = "20s"
+
+[wifi]
+# The unix socket the privileged helper listens on. The main daemon never runs
+# nmcli itself; it asks the helper over this socket.
+helper_socket = "/run/timeblaster/wifi.sock"
+interface = "wlan0"
+
+# The access point raised while in setup mode.
+setup_ssid = "TIMEBLASTER-SETUP"
+
+# Empty means an open network, which is the friendlier default for a device whose
+# whole point is being easy to set up — and it is only live while the user is
+# standing in front of it having just held a button. Set an 8-63 character
+# passphrase to secure it.
+setup_passphrase = ""
+
+setup_address = "10.42.0.1/24"
+
+# Setup mode ends by itself after this long, so a forgotten access point does not
+# stay up indefinitely.
+setup_timeout = "15m0s"
+
+connect_timeout = "45s"
+# How long to wait for a new network to prove itself — carrier plus an actual IP
+# address — before accepting it. Until it does, the previous known-good
+# credentials are kept and restored on failure.
+validate_timeout = "30s"
+scan_timeout = "20s"

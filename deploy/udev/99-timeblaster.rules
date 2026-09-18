@@ -1,0 +1,26 @@
+# Stable device name for the Arduino Nano ESP32.
+#
+# /dev/ttyACM0 is assigned in enumeration order and moves when USB devices are
+# replugged or when a second serial device appears. Timeblaster therefore opens
+# the Nano through the symlink created here, falling back to /dev/serial/by-id/*
+# if this rule is not installed.
+#
+# To adapt this to a different board, find its identifiers with:
+#   udevadm info -a -n /dev/ttyACM0 | grep -E 'idVendor|idProduct|serial'
+
+# Arduino Nano ESP32 (Arduino SA vendor id, ESP32-S3 native USB CDC).
+SUBSYSTEM=="tty", ATTRS{idVendor}=="2341", ATTRS{idProduct}=="0070", \
+  SYMLINK+="timeblaster-nano", MODE="0660", GROUP="dialout", TAG+="uaccess"
+
+# The same board in its bootloader/DFU mode, and the generic Espressif CDC id
+# some revisions enumerate as. Matching both means a board that has been reset
+# into the bootloader still appears under a predictable name.
+SUBSYSTEM=="tty", ATTRS{idVendor}=="2341", ATTRS{idProduct}=="0570", \
+  SYMLINK+="timeblaster-nano", MODE="0660", GROUP="dialout", TAG+="uaccess"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="303a", ATTRS{idProduct}=="1001", \
+  SYMLINK+="timeblaster-nano", MODE="0660", GROUP="dialout", TAG+="uaccess"
+
+# USB audio: make the alarm speaker's device nodes readable by the audio group.
+# Timeblaster addresses the card by its stable ALSA id rather than by number, so
+# no naming rule is needed here — only permissions.
+SUBSYSTEM=="sound", KERNEL=="card*", MODE="0660", GROUP="audio"
