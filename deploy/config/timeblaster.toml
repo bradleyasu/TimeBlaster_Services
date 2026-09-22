@@ -188,26 +188,40 @@ ipc_socket = "/run/timeblaster/mpv-tv.sock"
 # X11 or Wayland session. Timeblaster controls mpv over the IPC socket rather
 # than restarting it on every channel change.
 #
+# LEFT COMMENTED ON PURPOSE. Setting `args` replaces the whole list, so a copy
+# written here freezes at whatever was current the day it was installed and no
+# later improvement can reach it. Leaving it out means the daemon's built-in
+# list applies and upgrades fix things by themselves -- which is how a
+# five-second standby screen got fixed everywhere at once rather than only on
+# new installs.
+#
+# Uncomment to take full control. The list below is the built-in default as of
+# writing; check `timeblasterd --print-config` for what your build actually uses.
+#
 # If video is torn, black, or dropping frames on your television, see
 # docs/troubleshooting.md — it lists the alternative output configurations and
 # how to tell which one your setup wants.
-args = [
-  "--vo=gpu",
-  "--gpu-context=drm",
-  "--gpu-api=opengl",
-  "--hwdec=auto-safe",
-  "--fullscreen",
-  "--idle=yes",
-  "--force-window=yes",
-  "--keep-open=no",
-  "--no-input-default-bindings",
-  "--no-osc",
-  "--no-terminal",
-  "--msg-level=all=warn",
-  "--cache=yes",
-  "--demuxer-max-bytes=32MiB",
-  "--audio-device=auto",
-]
+#
+# args = [
+#   "--vo=gpu",
+#   "--gpu-context=drm",
+#   "--gpu-api=opengl",
+#   "--hwdec=auto-safe",
+#   "--fullscreen",
+#   "--idle=yes",
+#   "--force-window=yes",
+#   "--keep-open=no",
+#   # Without this a still image ends after five seconds and the screen goes
+#   # black. It applies only to images; video is unaffected.
+#   "--image-display-duration=inf",
+#   "--no-input-default-bindings",
+#   "--no-osc",
+#   "--no-terminal",
+#   "--msg-level=all=warn",
+#   "--cache=yes",
+#   "--demuxer-max-bytes=32MiB",
+#   "--audio-device=auto",
+# ]
 
 # Shown fullscreen whenever no channel is selected. This is what keeps a Linux
 # console off the television.

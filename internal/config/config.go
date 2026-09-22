@@ -413,6 +413,12 @@ func Default() Config {
 				"--idle=yes",
 				"--force-window=yes",
 				"--keep-open=no",
+				// Without this an image is shown for image-display-duration
+				// (5s by default) and then ends, leaving mpv idle and the
+				// television black. The standby screen has to stay up for as
+				// long as no channel is selected, which may be forever.
+				// Video is unaffected: the option applies only to images.
+				"--image-display-duration=inf",
 				"--no-input-default-bindings",
 				"--no-osc",
 				"--no-terminal",

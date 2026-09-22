@@ -482,8 +482,28 @@ func (s *Service) HandlePlayerEvent(ev mpv.Event) {
 	s.mu.RLock()
 	current := s.current
 	s.mu.RUnlock()
+
 	if current == nil {
-		return // the static image ended; nothing to recover
+		// The standby image ended. With --image-display-duration=inf it should
+		// not, but if it ever does the television goes black -- which is the
+		// single thing this subsystem exists to prevent, so put it back rather
+		// than assuming nothing is wrong.
+		s.log.Warn("the standby image ended unexpectedly; restoring it", "reason", ev.Reason)
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+
+			// Clear what we believe is on screen, or ShowNoChannel would decide
+			// the right image is already up and do nothing.
+			s.mu.Lock()
+			s.shownImage = ""
+			s.mu.Unlock()
+
+			if err := s.ShowNoChannel(ctx); err != nil {
+				s.log.Error("could not restore the standby image", "error", err)
+			}
+		}()
+		return
 	}
 
 	s.log.Warn("the channel stream ended unexpectedly; reloading",

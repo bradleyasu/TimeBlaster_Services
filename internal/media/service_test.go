@@ -539,16 +539,23 @@ func TestHandlePlayerEventIgnoresDeliberateStops(t *testing.T) {
 	}
 }
 
-func TestHandlePlayerEventIgnoresTheStaticImageEnding(t *testing.T) {
+func TestDeliberateStopsOnTheStandbyImageDoNotReload(t *testing.T) {
+	// "stop" and "quit" are our own doing -- they are what a channel change
+	// looks like from mpv's side. Reloading the standby image in response would
+	// fight whatever we were about to play.
 	f := newFixture(t, chans()...)
 	if err := f.svc.ShowNoChannel(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	f.player.Reset()
-	f.svc.HandlePlayerEvent(mpv.Event{Name: "end-file", Reason: "eof"})
+
+	for _, reason := range []string{"stop", "quit", "redirect"} {
+		f.svc.HandlePlayerEvent(mpv.Event{Name: "end-file", Reason: reason})
+	}
 	time.Sleep(50 * time.Millisecond)
+
 	if n := len(f.player.CallsNamed("loadfile")); n != 0 {
-		t.Errorf("static image eof triggered %d reloads", n)
+		t.Errorf("a deliberate stop triggered %d reloads", n)
 	}
 }
 
@@ -670,5 +677,42 @@ func TestStandbyImageBeforeThePlayerIsUpIsNotAnError(t *testing.T) {
 	if !lastLoadIs(t, f, "booting.png") {
 		t.Errorf("expected the standby screen after the player came up, got %+v",
 			f.player.CallsNamed("loadfile"))
+	}
+}
+
+func TestStandbyImageEndingIsRestoredNotIgnored(t *testing.T) {
+	// The bug this guards: mpv shows an image for image-display-duration and
+	// then goes idle, so the television went black a few seconds after the
+	// standby screen appeared. The daemon has to notice and put it back.
+	f := newFixture(t, chans()...)
+	ctx := context.Background()
+	if err := f.svc.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.ShowNoChannel(ctx); err != nil {
+		t.Fatal(err)
+	}
+	f.player.Reset()
+
+	f.svc.HandlePlayerEvent(mpv.Event{Name: "end-file", Reason: "eof"})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(f.player.CallsNamed("loadfile")) > 0 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if !lastLoadIsNoChannel(t, f) {
+		t.Fatalf("the standby image was not restored: %+v", f.player.CallsNamed("loadfile"))
+	}
+}
+
+func TestDefaultMPVArgsKeepImagesOnScreenForever(t *testing.T) {
+	// A five-second standby screen is worse than none: it looks like the device
+	// crashed. Pin the option that prevents it.
+	args := strings.Join(config.Default().MPV.Args, " ")
+	if !strings.Contains(args, "--image-display-duration=inf") {
+		t.Errorf("mpv defaults must hold a still image indefinitely: %s", args)
 	}
 }
