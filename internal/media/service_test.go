@@ -53,11 +53,12 @@ func (r *recordingObserver) listCount() int {
 }
 
 type fixture struct {
-	svc    *Service
-	etv    *ersatztv.Fake
-	player *mpv.Fake
-	obs    *recordingObserver
-	clock  *system.FakeClock
+	svc     *Service
+	etv     *ersatztv.Fake
+	player  *mpv.Fake
+	obs     *recordingObserver
+	clock   *system.FakeClock
+	overlay *mpv.OverlayRenderer
 }
 
 func newFixture(t *testing.T, channels ...ersatztv.Channel) *fixture {
@@ -74,7 +75,7 @@ func newFixture(t *testing.T, channels ...ersatztv.Channel) *fixture {
 		ErsatzTV: etv, Player: player, Overlay: overlay,
 		Clock: clk, Logger: testLogger(), Observer: obs,
 	})
-	return &fixture{svc: svc, etv: etv, player: player, obs: obs, clock: clk}
+	return &fixture{svc: svc, etv: etv, player: player, obs: obs, clock: clk, overlay: overlay}
 }
 
 func chans() []ersatztv.Channel {
@@ -737,5 +738,52 @@ func TestDefaultMPVArgsKeepImagesOnScreenForever(t *testing.T) {
 	args := strings.Join(config.Default().MPV.Args, " ")
 	if !strings.Contains(args, "--image-display-duration=inf") {
 		t.Errorf("mpv defaults must hold a still image indefinitely: %s", args)
+	}
+}
+
+func TestPlaybackRestartReleasesTheChannelBanner(t *testing.T) {
+	// The banner holds from the moment a channel is requested until the picture
+	// arrives, so the wiring from mpv's event through to the overlay has to be
+	// connected -- without it the banner would sit there until max_hold.
+	f := newFixture(t, chans()...)
+	ctx := context.Background()
+	if err := f.svc.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.SelectBand(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	if !f.overlay.Awaiting() {
+		t.Fatal("the banner should be holding for the picture")
+	}
+
+	f.svc.HandlePlayerEvent(mpv.Event{Name: "playback-restart"})
+
+	if f.overlay.Awaiting() {
+		t.Error("playback starting should have released the banner")
+	}
+}
+
+func TestPlaybackRestartIsNotMistakenForAStreamEnding(t *testing.T) {
+	// It arrives on the same event stream as end-file and must not trigger the
+	// stream-failure recovery path.
+	f := newFixture(t, chans()...)
+	ctx := context.Background()
+	if err := f.svc.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.SelectBand(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	f.player.Reset()
+
+	f.svc.HandlePlayerEvent(mpv.Event{Name: "playback-restart"})
+	time.Sleep(50 * time.Millisecond)
+
+	if n := len(f.player.CallsNamed("loadfile")); n != 0 {
+		t.Errorf("playback-restart triggered %d reloads", n)
+	}
+	if cur := f.svc.Current(); cur == nil || cur.Number != "1" {
+		t.Errorf("current channel disturbed: %+v", cur)
 	}
 }

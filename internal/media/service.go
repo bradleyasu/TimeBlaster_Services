@@ -474,6 +474,15 @@ func (s *Service) RestorePlayback(ctx context.Context) {
 // is almost always the right response, and falling back to the static image
 // after that fails keeps a console off the screen.
 func (s *Service) HandlePlayerEvent(ev mpv.Event) {
+	// The picture has arrived. This is what releases a channel banner that has
+	// been holding since the channel was requested.
+	if ev.Name == "playback-restart" {
+		if s.overlay != nil {
+			s.overlay.PlaybackStarted()
+		}
+		return
+	}
+
 	if ev.Name != "end-file" {
 		return
 	}

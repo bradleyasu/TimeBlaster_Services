@@ -259,8 +259,15 @@ type MPV struct {
 type Overlay struct {
 	// Enabled turns the banner on.
 	Enabled bool `toml:"channel_overlay_enabled"`
-	// Duration is how long the banner stays on screen.
+	// Duration is how long the banner stays on screen once the picture has
+	// actually arrived.
 	Duration Duration `toml:"channel_overlay_duration"`
+	// MaxHold caps how long the banner may wait for that picture. Tuning a
+	// channel takes a second or two warm and considerably longer when ErsatzTV
+	// has to cold-start it, so the banner holds until playback begins rather
+	// than expiring into a blank screen — but not forever, or a stream that
+	// never starts would pin it there.
+	MaxHold Duration `toml:"channel_overlay_max_hold"`
 	// TextFormat is a Go format string receiving the channel number, then the
 	// channel name. "CH %s" produces "CH 3".
 	TextFormat string `toml:"channel_overlay_text_format"`
@@ -439,6 +446,7 @@ func Default() Config {
 		Overlay: Overlay{
 			Enabled:    true,
 			Duration:   Dur(2500 * time.Millisecond),
+			MaxHold:    Dur(20 * time.Second),
 			TextFormat: "CH %s",
 			Color:      "#33FF33",
 			FontSize:   96,
@@ -638,6 +646,9 @@ func (c Config) Validate() error {
 	if c.Overlay.Enabled {
 		if c.Overlay.Duration.Duration <= 0 {
 			add("overlay.channel_overlay_duration must be positive when the overlay is enabled")
+		}
+		if c.Overlay.MaxHold.Duration < c.Overlay.Duration.Duration {
+			add("overlay.channel_overlay_max_hold must be at least channel_overlay_duration")
 		}
 		if c.Overlay.FontSize <= 0 {
 			add("overlay.channel_overlay_font_size must be positive, got %d", c.Overlay.FontSize)

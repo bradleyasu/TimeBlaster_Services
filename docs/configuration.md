@@ -168,7 +168,8 @@ The green **CH n** banner. All keys are prefixed `channel_overlay_`.
 | Key | Default |
 | --- | --- |
 | `channel_overlay_enabled` | `true` |
-| `channel_overlay_duration` | `"2.5s"` |
+| `channel_overlay_duration` | `"2.5s"` — how long it stays once the picture has arrived |
+| `channel_overlay_max_hold` | `"20s"` — how long it may wait for that picture |
 | `channel_overlay_text_format` | `"CH %s"` — a second `%s` receives the channel name |
 | `channel_overlay_color` | `"#33FF33"` |
 | `channel_overlay_font_size` | `96` on a 1280×720 canvas, scaled to the real resolution |

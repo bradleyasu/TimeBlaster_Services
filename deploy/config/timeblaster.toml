@@ -247,7 +247,15 @@ command_timeout = "5s"
 [overlay]
 # The bright green banner shown briefly on every channel change.
 channel_overlay_enabled = true
+
+# How long the banner stays up once the picture has actually arrived.
 channel_overlay_duration = "2.5s"
+
+# How long it may wait for that picture. Tuning a channel takes a second or two
+# warm and considerably longer when ErsatzTV has to cold-start it, so the banner
+# holds until playback begins rather than expiring while the screen still shows
+# the previous content. This only caps a stream that never starts at all.
+channel_overlay_max_hold = "20s"
 
 # A Go format string. One %s receives the channel number; a second, if present,
 # receives the channel name — so "CH %s" gives "CH 3" and "CH %s - %s" gives

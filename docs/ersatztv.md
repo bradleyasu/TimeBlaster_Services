@@ -230,10 +230,18 @@ It is drawn with mpv's own ASS overlay (`osd-overlay`), not a second graphical
 stack — there is no compositor on a Lite install, and starting one for a
 two-second banner would be absurd. It **does not restart playback**.
 
+The banner **holds until the picture actually arrives**, then stays for
+`channel_overlay_duration` and goes. Tuning takes a second or two warm and
+considerably longer when ErsatzTV has to cold-start a channel, so hiding it on a
+fixed timer meant it came and went while the screen still showed the previous
+content — exactly when the viewer most wants to know something is happening.
+`channel_overlay_max_hold` caps the wait, for a stream that never starts at all.
+
 ```toml
 [overlay]
 channel_overlay_enabled = true
 channel_overlay_duration = "2.5s"
+channel_overlay_max_hold = "20s"
 channel_overlay_text_format = "CH %s"     # or "CH %s - %s" to include the name
 channel_overlay_color = "#33FF33"
 channel_overlay_font_size = 96

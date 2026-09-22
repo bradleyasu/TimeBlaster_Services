@@ -104,7 +104,7 @@ func TestFormatOverlayText(t *testing.T) {
 	}
 }
 
-func TestOverlayShowAndAutoHide(t *testing.T) {
+func TestOverlayShowAndHideAfterThePicture(t *testing.T) {
 	fake := NewFake()
 	clk := system.NewFakeClock(time.Now())
 	cfg := overlayConfig()
@@ -133,15 +133,13 @@ func TestOverlayShowAndAutoHide(t *testing.T) {
 		t.Error("showing an overlay must not touch playback")
 	}
 
-	// Wait for the auto-hide, which runs on a goroutine driven by the fake clock.
-	deadline := time.Now().Add(2 * time.Second)
-	for clk.Waiters() == 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("hide timer was never registered")
-		}
-		time.Sleep(time.Millisecond)
-	}
+	// The banner holds until the picture arrives, then runs its normal course.
+	waitForWaiters(t, clk, 1)
+	r.PlaybackStarted()
+	waitForWaiters(t, clk, 2)
 	clk.Advance(3 * time.Second)
+
+	deadline := time.Now().Add(2 * time.Second)
 
 	for time.Now().Before(deadline) {
 		if len(fake.CallsNamed("osd-overlay")) >= 2 {
@@ -172,27 +170,19 @@ func TestOverlayRapidChannelChangesDoNotClearTheLatestBanner(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// Let all three hide goroutines register their timers.
-	deadline := time.Now().Add(2 * time.Second)
-	for clk.Waiters() < 3 {
-		if time.Now().After(deadline) {
-			t.Fatalf("expected three hide timers, got %d", clk.Waiters())
-		}
-		time.Sleep(time.Millisecond)
-	}
+	// Three banners, so three safety-net timers.
+	waitForWaiters(t, clk, 3)
 
-	clk.Advance(3 * time.Second)
+	// The picture arrives for the one the user landed on.
+	r.PlaybackStarted()
+	waitForWaiters(t, clk, 4)
+	clk.Advance(30 * time.Second)
 	time.Sleep(50 * time.Millisecond)
 
-	// Exactly one hide should have happened: the two superseded ones bail out.
-	hides := 0
-	for _, c := range fake.CallsNamed("osd-overlay") {
-		if c.Args[2] == "none" {
-			hides++
-		}
-	}
-	if hides != 1 {
-		t.Errorf("expected exactly one hide, got %d", hides)
+	// Exactly one hide: the superseded banners bail out rather than clearing
+	// the one that is actually on screen.
+	if n := hides(fake); n != 1 {
+		t.Errorf("expected exactly one hide, got %d", n)
 	}
 }
 
@@ -289,4 +279,105 @@ func TestFakeControllerBehaviour(t *testing.T) {
 	if _, ok := f.LastCall(); ok {
 		t.Error("LastCall on an empty fake")
 	}
+}
+
+func TestChannelBannerHoldsUntilThePictureArrives(t *testing.T) {
+	// The behaviour this fixes, seen on the Pi: the banner expired on a fixed
+	// timer while the screen still showed the previous content, so "CH 1" came
+	// and went seconds before channel 1 appeared.
+	fake := NewFake()
+	clk := system.NewFakeClock(time.Now())
+	cfg := overlayConfig()
+	cfg.Duration = config.Dur(2 * time.Second)
+	cfg.MaxHold = config.Dur(20 * time.Second)
+	r := NewOverlayRenderer(cfg, fake, clk, testLogger())
+
+	if err := r.ShowChannel(context.Background(), "1", "ErsatzTV"); err != nil {
+		t.Fatal(err)
+	}
+	if !r.Awaiting() {
+		t.Fatal("the banner should be holding for the picture")
+	}
+
+	// Well past the display duration, with no picture yet: it must still be up.
+	waitForWaiters(t, clk, 1)
+	clk.Advance(10 * time.Second)
+	time.Sleep(30 * time.Millisecond)
+	if hides(fake) != 0 {
+		t.Fatalf("the banner was hidden before the picture arrived: %+v", fake.CallsNamed("osd-overlay"))
+	}
+
+	// The picture arrives; now the normal duration applies.
+	r.PlaybackStarted()
+	if r.Awaiting() {
+		t.Error("the hold should be over")
+	}
+	// Two timers now: the superseded safety net and the real one. Waiting for
+	// only one would return before the real one had registered.
+	waitForWaiters(t, clk, 2)
+	clk.Advance(3 * time.Second)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && hides(fake) == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	if hides(fake) != 1 {
+		t.Errorf("expected exactly one hide once the picture arrived, got %d", hides(fake))
+	}
+}
+
+func TestChannelBannerGivesUpIfThePictureNeverArrives(t *testing.T) {
+	// A stream that never starts must not pin the banner on screen forever.
+	fake := NewFake()
+	clk := system.NewFakeClock(time.Now())
+	cfg := overlayConfig()
+	cfg.MaxHold = config.Dur(20 * time.Second)
+	r := NewOverlayRenderer(cfg, fake, clk, testLogger())
+
+	if err := r.ShowChannel(context.Background(), "3", "Sci-Fi"); err != nil {
+		t.Fatal(err)
+	}
+	waitForWaiters(t, clk, 1)
+	clk.Advance(25 * time.Second)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && hides(fake) == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	if hides(fake) != 1 {
+		t.Errorf("the banner should have given up after max_hold, hides=%d", hides(fake))
+	}
+}
+
+func TestPlaybackStartedIsHarmlessWithNoBanner(t *testing.T) {
+	// It is called for every playback start, the standby image included.
+	fake := NewFake()
+	r := NewOverlayRenderer(overlayConfig(), fake, system.NewFakeClock(time.Now()), testLogger())
+	r.PlaybackStarted()
+	r.PlaybackStarted()
+	if n := len(fake.Calls()); n != 0 {
+		t.Errorf("issued %d commands with no banner pending", n)
+	}
+}
+
+func hides(f *Fake) int {
+	n := 0
+	for _, c := range f.CallsNamed("osd-overlay") {
+		if c.Args[2] == "none" {
+			n++
+		}
+	}
+	return n
+}
+
+func waitForWaiters(t *testing.T, clk *system.FakeClock, want int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if clk.Waiters() >= want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("expected %d pending timers, have %d", want, clk.Waiters())
 }

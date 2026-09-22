@@ -51,6 +51,9 @@ type OverlayRenderer struct {
 	// second banner is not cleared early by the first one's timer.
 	generation uint64
 	visible    bool
+	// awaiting marks a channel banner that is waiting for the picture to
+	// arrive. Until it does, only the safety-net timer can clear it.
+	awaiting bool
 }
 
 // NewOverlayRenderer builds a renderer.
@@ -58,10 +61,20 @@ func NewOverlayRenderer(cfg config.Overlay, ctrl Controller, clock system.Clock,
 	return &OverlayRenderer{cfg: cfg, ctrl: ctrl, clock: clock, log: log}
 }
 
-// ShowChannel displays the banner for a channel and schedules its removal.
+// ShowChannel displays the banner for a channel and holds it until the picture
+// actually arrives.
 //
-// It never restarts playback and never blocks the caller: the hide is handled on
-// a background goroutine so a channel change returns immediately.
+// Hiding on a fixed timer looked wrong on real hardware: tuning takes over a
+// second warm and much longer when ErsatzTV has to cold-start the channel, so
+// the banner came and went while the screen still showed the previous content,
+// and the viewer was left with no idea anything was happening. A television
+// keeps the channel number up until the picture does, so this does too.
+//
+// PlaybackStarted ends the hold. MaxHold is only a safety net, for a stream
+// that never starts at all.
+//
+// It never restarts playback and never blocks the caller: the hide is handled
+// on a background goroutine so a channel change returns immediately.
 func (o *OverlayRenderer) ShowChannel(ctx context.Context, number, name string) error {
 	if !o.cfg.Enabled {
 		return nil
@@ -75,10 +88,45 @@ func (o *OverlayRenderer) ShowChannel(ctx context.Context, number, name string) 
 	o.mu.Lock()
 	o.generation++
 	gen := o.generation
+	o.awaiting = true
+	o.mu.Unlock()
+
+	go o.hideAfter(gen, o.maxHold())
+	return nil
+}
+
+// PlaybackStarted tells the overlay the picture has arrived, so the banner can
+// now do its normal turn on screen and go.
+//
+// Called for every playback start, including the standby image, which is
+// harmless: it only does anything when a channel banner is waiting.
+func (o *OverlayRenderer) PlaybackStarted() {
+	o.mu.Lock()
+	if !o.awaiting {
+		o.mu.Unlock()
+		return
+	}
+	o.awaiting = false
+	// Invalidate the safety-net timer, then schedule the real one.
+	o.generation++
+	gen := o.generation
 	o.mu.Unlock()
 
 	go o.hideAfter(gen, o.cfg.Duration.Duration)
-	return nil
+}
+
+// Awaiting reports whether a banner is holding for the picture.
+func (o *OverlayRenderer) Awaiting() bool {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.awaiting
+}
+
+func (o *OverlayRenderer) maxHold() time.Duration {
+	if d := o.cfg.MaxHold.Duration; d > 0 {
+		return d
+	}
+	return 20 * time.Second
 }
 
 // ShowText displays arbitrary text with the configured styling. It backs status
@@ -93,6 +141,7 @@ func (o *OverlayRenderer) ShowText(ctx context.Context, text string, d time.Dura
 	o.mu.Lock()
 	o.generation++
 	gen := o.generation
+	o.awaiting = false
 	o.mu.Unlock()
 
 	if d > 0 {
@@ -120,6 +169,7 @@ func (o *OverlayRenderer) Hide(ctx context.Context) error {
 	o.mu.Lock()
 	o.generation++
 	o.visible = false
+	o.awaiting = false
 	o.mu.Unlock()
 
 	// An empty event list is how mpv clears an overlay slot.
