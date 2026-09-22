@@ -865,6 +865,16 @@ install_ffmpeg() {
     return
   fi
 
+  # Fetching the build and telling ErsatzTV about it are separate concerns, and
+  # the second must happen even when the first has nothing to do. Folding them
+  # into one function meant "already installed" returned early and silently
+  # skipped the configuration -- which is why a correctly installed FFmpeg sat
+  # there unused.
+  fetch_ffmpeg
+  point_ersatztv_at_ffmpeg
+}
+
+fetch_ffmpeg() {
   local arch asset_arch
   arch="$(dpkg --print-architecture)"
   case "$arch" in
@@ -942,8 +952,6 @@ install_ffmpeg() {
   got="$("${FFMPEG_DIR}/bin/ffmpeg" -version 2>/dev/null | head -1 | awk '{print $3}')"
   ok "installed FFmpeg ${got:-$tag} to ${FFMPEG_DIR}/bin"
   note "ErsatzTV uses ${FFMPEG_DIR}/bin; the system FFmpeg is untouched."
-
-  point_ersatztv_at_ffmpeg
 }
 
 # point_ersatztv_at_ffmpeg updates the paths ErsatzTV has already recorded.
@@ -960,6 +968,11 @@ install_ffmpeg() {
 point_ersatztv_at_ffmpeg() {
   local db="/var/lib/ersatztv/.local/share/ersatztv/ersatztv.sqlite3"
 
+  # Never point it at something that is not there.
+  if [[ ! -x "${FFMPEG_DIR}/bin/ffmpeg" ]]; then
+    skip "no FFmpeg at ${FFMPEG_DIR}/bin; leaving ErsatzTV's setting alone"
+    return
+  fi
   if [[ ! -f "$db" ]]; then
     # A fresh install has no database yet and will read PATH on first run.
     skip "ErsatzTV has no settings database yet; it will pick up FFmpeg on first run"
