@@ -134,7 +134,7 @@ imports `app`. Business-logic packages (`alarm`, `input`, `protocol`, `media`) n
 | `protocol` | The `TB1` wire format: frame, escape, checksum, encode, decode, sequence. Pure functions. | Ports, reconnects. |
 | `serialport` | `Transport` interface, real USB CDC implementation, stable-path resolution, reconnect/backoff, fake transport for tests. | Message semantics. |
 | `hardware` | The Nano *session*: read loop, write queue, heartbeat/liveness, time sync cadence, display/LED command API, resync on reconnect. | Deciding display content policy (that is `app`/`media`/`alarm`). |
-| `ersatztv` | HTTP client for `/api/channels`, health probe, channel sorting, stream URL construction, retry/backoff. | Playback. |
+| `ersatztv` | HTTP client for the IPTV playlist (`/iptv/channels.m3u`, which needs no authentication where `/api/` does), M3U parsing, channel sorting, stream URL construction, retry/backoff. | Playback. |
 | `mpv` | Spawning/supervising mpv, the JSON IPC client, property get/set, `loadfile`, `osd-overlay` ASS overlays, crash recovery. | Channel semantics. |
 | `media` | The channel service: current channel, channel list refresh, pot-position→channel mapping, overlay text, no-channel image. | Alarm anything. |
 | `wifi` | Helper RPC protocol + client (in daemon) + server (in root helper): AP up/down, scan, connect-with-rollback, status, captive portal. | Anything not networking. |

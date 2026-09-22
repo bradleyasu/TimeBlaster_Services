@@ -5,17 +5,24 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
 
-// A real ErsatzTV /api/channels response.
-const sampleChannels = `[
-  {"id":1,"number":"1","name":"Movies 24/7","ffmpegProfile":"Default","language":"eng","streamingMode":"HttpLiveStreamingDirect"},
-  {"id":3,"number":"10","name":"Cartoons","ffmpegProfile":"Default","language":"eng","streamingMode":"TransportStream"},
-  {"id":2,"number":"2.1","name":"Sci-Fi Sub","ffmpegProfile":"Default","language":"eng","streamingMode":"HttpLiveStreamingDirect"},
-  {"id":4,"number":"2","name":"Sci-Fi","ffmpegProfile":"Default","language":"eng","streamingMode":"HttpLiveStreamingDirect"}
-]`
+// A real ErsatzTV playlist. The first entry is captured verbatim from a running
+// v26.10.0 server on the Raspberry Pi, attributes and spacing unaltered; the
+// rest follow its shape to cover numbering and ordering.
+const sampleChannels = `#EXTM3U url-tvg="http://127.0.0.1:8409/iptv/xmltv.xml" x-tvg-url="http://127.0.0.1:8409/iptv/xmltv.xml"
+#EXTINF:0 tvg-id="C1.145.ersatztv.org" channel-id="6Yn5GlwfE0uqkBcy6t6gaw" channel-number="1" CUID="6Yn5GlwfE0uqkBcy6t6gaw" tvg-chno="1" tvg-name="Movies 24/7" tvg-logo="http://127.0.0.1:8409/iptv/logos/gen?text=ErsatzTV" group-title="ErsatzTV" tvc-stream-vcodec="h264" tvc-stream-acodec="aac", Movies 24/7
+http://127.0.0.1:8409/iptv/channel/1.ts
+#EXTINF:0 tvg-id="C10.145.ersatztv.org" channel-number="10" tvg-chno="10" tvg-name="Cartoons" group-title="ErsatzTV", Cartoons
+http://127.0.0.1:8409/iptv/channel/10.ts
+#EXTINF:0 tvg-id="C21.145.ersatztv.org" channel-number="2.1" tvg-chno="2.1" tvg-name="Sci-Fi Sub" group-title="ErsatzTV", Sci-Fi Sub
+http://127.0.0.1:8409/iptv/channel/2.1.m3u8
+#EXTINF:0 tvg-id="C2.145.ersatztv.org" channel-number="2" tvg-chno="2" tvg-name="Sci-Fi" group-title="ErsatzTV", Sci-Fi
+http://127.0.0.1:8409/iptv/channel/2.ts
+`
 
 func newTestClient(t *testing.T, handler http.HandlerFunc) (*Client, *httptest.Server) {
 	t.Helper()
@@ -47,7 +54,6 @@ func TestChannelsParsesAndSorts(t *testing.T) {
 	var gotPath string
 	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
-		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(sampleChannels))
 	})
 
@@ -55,7 +61,8 @@ func TestChannelsParsesAndSorts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Channels: %v", err)
 	}
-	if gotPath != "/api/channels" {
+	// The playlist, not /api/channels: v26 answers that with 401.
+	if gotPath != PlaylistPath {
 		t.Errorf("path: %q", gotPath)
 	}
 	// Numeric ordering: 1, 2, 2.1, 10 — not the lexical 1, 10, 2, 2.1.
@@ -68,14 +75,41 @@ func TestChannelsParsesAndSorts(t *testing.T) {
 	if chs[0].Name != "Movies 24/7" {
 		t.Errorf("name: %q", chs[0].Name)
 	}
-	if chs[0].StreamingMode != "HttpLiveStreamingDirect" {
-		t.Errorf("streaming mode: %q", chs[0].StreamingMode)
+}
+
+func TestChannelsReadsThePlaylistNotTheAuthenticatedAPI(t *testing.T) {
+	// The regression this guards: ErsatzTV v26 returns 401 from /api/, which had
+	// Timeblaster reporting ersatztv down on a perfectly healthy server.
+	var paths []string
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_, _ = w.Write([]byte(sampleChannels))
+	})
+
+	if _, err := c.Channels(context.Background()); err != nil {
+		t.Fatalf("Channels: %v", err)
+	}
+	if err := c.Ping(context.Background()); err != nil {
+		t.Fatalf("Ping: %v", err)
+	}
+	for _, p := range paths {
+		if strings.HasPrefix(p, "/api/") {
+			t.Errorf("must not touch the authenticated API, but requested %q", p)
+		}
 	}
 }
 
 func TestChannelsDropsEntriesWithoutANumber(t *testing.T) {
 	c, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`[{"id":1,"number":"","name":"Broken"},{"id":2,"number":"3","name":"Fine"}]`))
+		_, _ = w.Write([]byte("#EXTM3U\n" +
+			"#EXTINF:0 tvg-name=\"Broken\", Broken\n" +
+			"http://host/something-else\n" +
+			"#EXTINF:0 channel-number=\"3\" tvg-name=\"Fine\", Fine\n" +
+			"http://host/iptv/channel/3.ts\n"))
 	})
 	chs, err := c.Channels(context.Background())
 	if err != nil {
@@ -88,7 +122,7 @@ func TestChannelsDropsEntriesWithoutANumber(t *testing.T) {
 
 func TestChannelsEmptyList(t *testing.T) {
 	c, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`[]`))
+		_, _ = w.Write([]byte("#EXTM3U\n"))
 	})
 	chs, err := c.Channels(context.Background())
 	if err != nil {
@@ -106,7 +140,8 @@ func TestChannelsReportsServerErrors(t *testing.T) {
 	}{
 		{"http 500", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(500) }},
 		{"http 404", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(404) }},
-		{"malformed json", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("<html>starting up</html>")) }},
+		{"a login page instead of a playlist", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("<html>sign in</html>")) }},
+		{"the authenticated api", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(401) }},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -143,7 +178,7 @@ func TestChannelsRespectsContextCancellation(t *testing.T) {
 
 func TestPing(t *testing.T) {
 	c, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`[]`))
+		_, _ = w.Write([]byte("#EXTM3U\n"))
 	})
 	if err := c.Ping(context.Background()); err != nil {
 		t.Errorf("Ping: %v", err)

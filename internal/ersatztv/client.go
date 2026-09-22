@@ -10,7 +10,6 @@ package ersatztv
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -160,37 +159,38 @@ func New(opts Options) (*Client, error) {
 // BaseURL reports the configured server address.
 func (c *Client) BaseURL() string { return c.base.String() }
 
+// PlaylistPath is the IPTV playlist the channel list is read from.
+//
+// Not /api/channels: ErsatzTV v26 requires authentication there and answers an
+// anonymous request with 401, while the playlist every other client consumes
+// stays open. See m3u.go.
+const PlaylistPath = "/iptv/channels.m3u"
+
 // Channels fetches the channel list.
 func (c *Client) Channels(ctx context.Context) ([]Channel, error) {
-	body, err := c.get(ctx, "/api/channels")
+	body, err := c.get(ctx, PlaylistPath)
 	if err != nil {
 		return nil, err
 	}
 
-	var chs []Channel
-	if err := json.Unmarshal(body, &chs); err != nil {
-		return nil, fmt.Errorf("%w: decoding channel list: %w", ErrUnavailable, err)
+	raw := string(body)
+	// A playlist should announce itself. Anything else means we are talking to
+	// something that is not ErsatzTV, or to a login page.
+	if !strings.Contains(raw, "#EXTM3U") && strings.TrimSpace(raw) != "" {
+		return nil, fmt.Errorf("%w: %s did not return an M3U playlist", ErrUnavailable, PlaylistPath)
 	}
 
-	// Drop anything unusable rather than letting an empty channel number become a
-	// band on the channel knob that plays nothing.
-	out := chs[:0]
-	for _, ch := range chs {
-		if strings.TrimSpace(ch.Number) == "" {
-			continue
-		}
-		out = append(out, ch)
-	}
-	SortChannels(out)
-	return out, nil
+	// ParseM3U already drops entries with no channel number, so nothing that
+	// would become a dead band on the channel knob survives.
+	return ParseM3U(raw), nil
 }
 
-// Ping checks that the server is up. It uses the channel list endpoint because a
+// Ping checks that the server is up. It uses the playlist endpoint because a
 // server that is listening but has not finished initialising its database will
 // accept a TCP connection and then fail the request — which is exactly the state
 // we need to distinguish during boot.
 func (c *Client) Ping(ctx context.Context) error {
-	_, err := c.get(ctx, "/api/channels")
+	_, err := c.get(ctx, PlaylistPath)
 	return err
 }
 
@@ -224,7 +224,7 @@ func (c *Client) get(ctx context.Context, path string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ersatztv: building request: %w", err)
 	}
-	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Accept", "*/*")
 
 	resp, err := c.http.Do(req)
 	if err != nil {

@@ -11,12 +11,18 @@ Timeblaster needs exactly three things from ErsatzTV:
 2. what they are called,
 3. what URL plays them.
 
+All three come from the **IPTV playlist**, `/iptv/channels.m3u` — the same
+interface Plex, Jellyfin and Kodi consume. Not the JSON API at `/api/channels`:
+ErsatzTV v26 requires authentication there and answers an anonymous request with
+`401`, while the playlist stays open. Reading the playlist means Timeblaster
+needs no credentials and no configuration to find your channels.
+
 Nothing in the alarm path touches any of it. If ErsatzTV is down, starting,
 misconfigured or removed entirely, the television shows the standby image and the
 alarm clock is completely unaffected.
 
 ```text
-timeblasterd ──GET /api/channels──► ErsatzTV :8409
+timeblasterd ─GET /iptv/channels.m3u─► ErsatzTV :8409
       │                                   │
       │ loadfile over JSON IPC            │ HLS or MPEG-TS
       ▼                                   ▼
@@ -222,8 +228,12 @@ tbctl channels                    # what Timeblaster sees
 tbctl channel 3                   # select one by hand
 tbctl channel off                 # show the standby image
 
-curl -s http://127.0.0.1:8409/api/channels | python3 -m json.tool   # what ErsatzTV says
-curl -s http://127.0.0.1:8409/iptv/channels.m3u                     # the playlist
+# What ErsatzTV says. This is the exact request Timeblaster makes.
+curl -s http://127.0.0.1:8409/iptv/channels.m3u
+
+# /api/ needs authentication in v26 and will answer 401; that is expected and
+# is not what Timeblaster uses.
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8409/api/channels
 
 # Play a channel directly, bypassing Timeblaster, to isolate the problem:
 mpv --vo=gpu --gpu-context=drm 'http://127.0.0.1:8409/iptv/channel/1.m3u8?mode=mixed'
@@ -236,6 +246,7 @@ journalctl -u timeblaster.service -f | grep -E 'channel|mpv|ersatztv'
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | `ersatztv: down` in health | Not running, or still starting | `systemctl status ersatztv.service` |
+| `ersatztv: down` while the web UI works | The playlist is not reachable | `curl -s http://127.0.0.1:8409/iptv/channels.m3u` — it should begin `#EXTM3U` |
 | No channels listed | None created yet | Create one at `:8409` |
 | Knob does nothing | No channels, or the Nano is disconnected | `tbctl channels`, `tbctl health` |
 | Channels flicker at a boundary | Hysteresis too low for your pots | Raise `input.channel_hysteresis` to 0.35 |
