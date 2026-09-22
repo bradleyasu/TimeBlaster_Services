@@ -739,10 +739,16 @@ install_ersatztv() {
 
   local installed_version=""
   [[ -f "${ERSATZTV_DIR}/.version" ]] && installed_version="$(cat "${ERSATZTV_DIR}/.version")"
-  if [[ "$installed_version" == "$tag" ]]; then
+  # The binary has to be there too, not just the stamp. A version file alone
+  # once let a broken install -- the archive extracted one level too deep --
+  # survive every rerun, because the stamp said the work was already done.
+  if [[ "$installed_version" == "$tag" && -x "${ERSATZTV_DIR}/ErsatzTV" ]]; then
     skip "ErsatzTV ${tag} is already installed"
     ensure_ersatztv_service
     return
+  fi
+  if [[ "$installed_version" == "$tag" ]]; then
+    info "ErsatzTV ${tag} is stamped but its binary is missing; reinstalling"
   fi
 
   url="$(curl -fsSL "$api" 2>/dev/null | grep '"browser_download_url"' \
