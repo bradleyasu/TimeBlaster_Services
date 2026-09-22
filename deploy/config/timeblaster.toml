@@ -213,6 +213,18 @@ args = [
 # console off the television.
 no_channel_image = "/usr/share/timeblaster/assets/no-channel.png"
 
+# Shown instead, from startup until the channel list has been read for the first
+# time. It is the same screen timeblaster-splash paints into the framebuffer
+# during boot, so the handover from the splash to mpv is invisible -- and it
+# avoids inviting the user to turn the channel knob before ErsatzTV has any
+# channels behind it. Empty falls back to no_channel_image.
+booting_image = "/usr/share/timeblaster/assets/booting.png"
+
+# How long the booting screen may stay up. Past this the no-channel screen is
+# shown even if the channel list never loaded: at that point the device is not
+# booting, something is wrong, and saying so is more honest.
+booting_timeout = "1m30s"
+
 restart_min_backoff = "1s"
 restart_max_backoff = "30s"
 startup_timeout = "15s"

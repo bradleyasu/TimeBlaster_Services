@@ -54,6 +54,11 @@ type Status struct {
 // ErrNoChannels means no channel is available to select.
 var ErrNoChannels = errors.New("media: no channels are available")
 
+// stoppedScreen marks "playback stopped" in shownImage. It is a sentinel rather
+// than an empty string so that the no-image-configured case is still
+// de-duplicated: without it, every failed refresh would re-issue a stop.
+const stoppedScreen = "\x00stopped"
+
 // Deps are the service's collaborators.
 type Deps struct {
 	ErsatzTV ersatztv.API
@@ -79,28 +84,39 @@ type Service struct {
 	observer Observer
 	channels []ersatztv.Channel
 	current  *ersatztv.Channel
-	// showingNoChannel tracks whether the static image is up, so we do not reload
-	// it on every failed refresh and make the television flicker.
-	showingNoChannel bool
-	reachable        bool
-	lastRefresh      time.Time
-	lastErr          error
+	// shownImage is the static image currently on screen, so we do not reload it
+	// on every failed refresh and make the television flicker. Empty means a
+	// channel is playing, or nothing has been shown yet.
+	shownImage string
+	// ready becomes true once the channel list has been read successfully. Until
+	// then the television shows the booting screen rather than inviting the user
+	// to turn a knob that cannot do anything yet.
+	ready        bool
+	bootDeadline time.Time
+	reachable    bool
+	lastRefresh  time.Time
+	lastErr      error
 
 	refreshNow chan struct{}
 }
 
 // NewService builds the media service.
 func NewService(etvCfg config.ErsatzTV, mpvCfg config.MPV, d Deps) *Service {
+	timeout := mpvCfg.BootingTimeout.Duration
+	if timeout <= 0 {
+		timeout = 90 * time.Second
+	}
 	return &Service{
-		etvCfg:     etvCfg,
-		mpvCfg:     mpvCfg,
-		etv:        d.ErsatzTV,
-		player:     d.Player,
-		overlay:    d.Overlay,
-		clock:      d.Clock,
-		log:        d.Logger,
-		observer:   d.Observer,
-		refreshNow: make(chan struct{}, 1),
+		etvCfg:       etvCfg,
+		mpvCfg:       mpvCfg,
+		etv:          d.ErsatzTV,
+		player:       d.Player,
+		overlay:      d.Overlay,
+		clock:        d.Clock,
+		log:          d.Logger,
+		observer:     d.Observer,
+		bootDeadline: d.Clock.Now().Add(timeout),
+		refreshNow:   make(chan struct{}, 1),
 	}
 }
 
@@ -178,9 +194,11 @@ func (s *Service) Refresh(ctx context.Context) error {
 
 	s.mu.Lock()
 	wasReachable := s.reachable
+	wasReady := s.ready
 	changed := !channelsEqual(s.channels, channels)
 	s.channels = channels
 	s.reachable = true
+	s.ready = true
 	s.lastRefresh = s.clock.Now()
 	s.lastErr = nil
 	// If the selected channel disappeared, drop the selection so the knob's
@@ -206,6 +224,13 @@ func (s *Service) Refresh(ctx context.Context) error {
 		s.log.Info("the selected channel no longer exists; showing the no-channel image")
 		if err := s.ShowNoChannel(ctx); err != nil {
 			s.log.Warn("could not show the no-channel image", "error", err)
+		}
+	}
+	// The first successful read means the device has finished coming up, so the
+	// booting screen gives way to the one that invites the knob to be turned.
+	if !wasReady && !dropped && s.Current() == nil {
+		if err := s.ShowNoChannel(ctx); err != nil {
+			s.log.Debug("could not swap the booting screen", "error", err)
 		}
 	}
 	return nil
@@ -293,7 +318,7 @@ func (s *Service) SelectNumber(ctx context.Context, number string) error {
 // SelectChannel plays a channel and shows the change overlay.
 func (s *Service) SelectChannel(ctx context.Context, ch ersatztv.Channel) error {
 	s.mu.Lock()
-	unchanged := s.current != nil && s.current.Number == ch.Number && !s.showingNoChannel
+	unchanged := s.current != nil && s.current.Number == ch.Number && s.shownImage == ""
 	s.mu.Unlock()
 	if unchanged {
 		return nil
@@ -313,7 +338,7 @@ func (s *Service) SelectChannel(ctx context.Context, ch ersatztv.Channel) error 
 
 	s.mu.Lock()
 	s.current = &ch
-	s.showingNoChannel = false
+	s.shownImage = ""
 	s.lastErr = nil
 	obs := s.observer
 	s.mu.Unlock()
@@ -337,14 +362,20 @@ func (s *Service) SelectChannel(ctx context.Context, ch ersatztv.Channel) error 
 // This is what keeps a Linux console off the television: mpv stays running with
 // the image loaded whenever no channel is selected.
 func (s *Service) ShowNoChannel(ctx context.Context) error {
+	image := s.standbyImage()
+
+	shown := image
+	if shown == "" {
+		shown = stoppedScreen
+	}
+
 	s.mu.Lock()
-	already := s.showingNoChannel && s.current == nil
+	already := s.shownImage == shown && s.current == nil
 	s.mu.Unlock()
 	if already {
 		return nil
 	}
 
-	image := s.mpvCfg.NoChannelImage
 	if image == "" {
 		s.log.Debug("no no-channel image is configured; stopping playback instead")
 		if _, err := s.player.Command(ctx, "stop"); err != nil {
@@ -361,7 +392,7 @@ func (s *Service) ShowNoChannel(ctx context.Context) error {
 	s.mu.Lock()
 	had := s.current != nil
 	s.current = nil
-	s.showingNoChannel = true
+	s.shownImage = shown
 	obs := s.observer
 	s.mu.Unlock()
 
@@ -374,6 +405,26 @@ func (s *Service) ShowNoChannel(ctx context.Context) error {
 	return nil
 }
 
+// standbyImage picks which static screen belongs on the television.
+//
+// The booting screen stays up until the channel list has been read once, so the
+// device never invites the user to turn the channel knob before there is
+// anything behind it. The deadline stops it lingering forever when ErsatzTV is
+// simply broken: past it the device is not booting, something is wrong, and the
+// no-channel screen is the more honest thing to show.
+func (s *Service) standbyImage() string {
+	s.mu.RLock()
+	ready := s.ready
+	deadline := s.bootDeadline
+	s.mu.RUnlock()
+
+	booting := s.mpvCfg.BootingImage
+	if !ready && booting != "" && s.clock.Now().Before(deadline) {
+		return booting
+	}
+	return s.mpvCfg.NoChannelImage
+}
+
 // RestorePlayback re-establishes what should be on screen. It is called after
 // mpv restarts: the supervisor hands back a fresh, idle player, and this puts
 // the current channel (or the static image) back without the user noticing
@@ -382,7 +433,7 @@ func (s *Service) RestorePlayback(ctx context.Context) {
 	s.mu.Lock()
 	current := s.current
 	// Force a reload even though the selection has not changed.
-	s.current, s.showingNoChannel = nil, false
+	s.current, s.shownImage = nil, ""
 	s.mu.Unlock()
 
 	if current == nil {

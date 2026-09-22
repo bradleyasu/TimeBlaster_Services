@@ -1,0 +1,154 @@
+#!/usr/bin/env python3
+"""Paint the Timeblaster boot screen onto the television, then exit.
+
+The point of exiting is the important part. mpv drives HDMI through DRM/KMS and
+needs to become DRM master; anything still holding the device when it starts
+either loses the race or forces a visible black flash on handover. So this
+writes pixels into the framebuffer and gets out of the way. The image simply
+stays there — nothing else is drawing — until timeblasterd's mpv takes over,
+which makes the transition seamless rather than a blink.
+
+It also switches to a clean virtual terminal first. setup.sh disables the getty
+on that VT, so what is on screen is the splash and nothing else: no login
+prompt, no cursor, no kernel messages.
+
+Usage:
+    timeblaster-splash                 paint the boot screen
+    timeblaster-splash --check         report what it would do, paint nothing
+    timeblaster-splash --clear         paint a plain dark screen
+    timeblaster-splash --text "..."    override the message
+"""
+
+import argparse
+import fcntl
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Installed location, so the script works from /usr/local/bin too.
+sys.path.insert(0, "/usr/local/lib/timeblaster")
+
+try:
+    from tbdisplay import BG, DIM, EDGE, GREEN, Canvas, framebuffer_geometry
+except ImportError as exc:  # pragma: no cover - only hit on a broken install
+    print(f"timeblaster-splash: cannot import tbdisplay: {exc}", file=sys.stderr)
+    raise SystemExit(0)   # never fail the boot over a splash screen
+
+DEFAULT_HEADLINE = "TIMEBLASTER"
+DEFAULT_MESSAGE = "BOOTING, PLEASE STAND BY..."
+
+# linux/vt.h
+VT_ACTIVATE = 0x5606
+VT_WAITACTIVE = 0x5607
+
+
+def activate_vt(number):
+    """Switch the console to the given virtual terminal.
+
+    Done with the ioctl rather than by shelling out to chvt so the splash has no
+    dependency on the kbd package being installed.
+    """
+    try:
+        fd = os.open("/dev/tty0", os.O_WRONLY)
+    except OSError as exc:
+        return f"cannot open /dev/tty0: {exc}"
+    try:
+        fcntl.ioctl(fd, VT_ACTIVATE, number)
+        fcntl.ioctl(fd, VT_WAITACTIVE, number)
+    except OSError as exc:
+        return f"cannot switch to tty{number}: {exc}"
+    finally:
+        os.close(fd)
+    return None
+
+
+def quiet_tty(number):
+    """Clear the terminal and hide its cursor, so nothing shows through."""
+    try:
+        with open(f"/dev/tty{number}", "w") as tty:
+            tty.write("\033[2J\033[H\033[?25l")
+            tty.flush()
+    except OSError:
+        # Not fatal: the framebuffer write below covers the screen anyway.
+        pass
+
+
+def render(width, height, headline, message, blank=False):
+    c = Canvas(width, height, BG)
+    if blank:
+        return c
+
+    c.scanlines()
+
+    scale = max(1, height // 90)
+    c.center_text(headline, height // 2 - scale * 16, scale, GREEN)
+
+    rule_w = Canvas.text_width(headline, scale)
+    c.rect((width - rule_w) // 2, height // 2 - scale * 2, rule_w, max(1, scale // 6), EDGE)
+
+    if message:
+        sub = max(1, scale // 2)
+        c.center_text(message, height // 2 + scale * 4, sub, DIM)
+    return c
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--device", default="fb0", help="framebuffer device name (default: fb0)")
+    ap.add_argument("--vt", type=int, default=1,
+                    help="virtual terminal to display on (default: 1; 0 to leave it alone)")
+    ap.add_argument("--headline", default=DEFAULT_HEADLINE)
+    ap.add_argument("--text", default=DEFAULT_MESSAGE, help="message under the headline")
+    ap.add_argument("--clear", action="store_true", help="paint a plain dark screen")
+    ap.add_argument("--check", action="store_true", help="report what would happen, paint nothing")
+    args = ap.parse_args()
+
+    geometry = framebuffer_geometry(args.device)
+    if geometry is None:
+        # A missing framebuffer is not a failure worth stopping a boot over. Say
+        # so clearly -- it will be in the journal -- and leave the screen alone
+        # so nothing interferes with mpv taking the display later.
+        print(f"timeblaster-splash: no framebuffer at /dev/{args.device}; "
+              "skipping the boot screen. On a Raspberry Pi this usually means "
+              "fbdev emulation is off; the television is unaffected.",
+              file=sys.stderr)
+        return 0
+
+    width, height, bpp, stride = geometry
+    if args.check:
+        print(f"framebuffer /dev/{args.device}: {width}x{height}, {bpp}bpp, stride {stride}")
+        print(f"target vt: {args.vt}")
+        print(f"headline: {args.headline!r}")
+        print(f"message:  {args.text!r}")
+        return 0
+
+    if args.vt:
+        problem = activate_vt(args.vt)
+        if problem:
+            print(f"timeblaster-splash: {problem}", file=sys.stderr)
+        else:
+            quiet_tty(args.vt)
+
+    canvas = render(width, height, args.headline, args.text, blank=args.clear)
+
+    try:
+        payload = canvas.to_framebuffer_bytes(bpp, stride)
+    except ValueError as exc:
+        print(f"timeblaster-splash: {exc}; skipping the boot screen", file=sys.stderr)
+        return 0
+
+    try:
+        with open(f"/dev/{args.device}", "wb") as fb:
+            fb.write(payload)
+            fb.flush()
+    except OSError as exc:
+        print(f"timeblaster-splash: cannot write /dev/{args.device}: {exc}", file=sys.stderr)
+        return 0
+
+    print(f"timeblaster-splash: painted {width}x{height} at {bpp}bpp on vt{args.vt}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

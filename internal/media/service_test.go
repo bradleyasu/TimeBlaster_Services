@@ -216,6 +216,9 @@ func TestSelectChannelLoadsTheStreamAndDrawsTheOverlay(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Becoming ready paints the no-channel screen, so start counting from here.
+	f.player.Reset()
+
 	if err := f.svc.SelectBand(ctx, 2); err != nil {
 		t.Fatal(err)
 	}
@@ -295,6 +298,10 @@ func TestSelectNumberUnknownChannel(t *testing.T) {
 func TestShowNoChannelLoadsTheStaticImage(t *testing.T) {
 	f := newFixture(t, chans()...)
 	ctx := context.Background()
+	// Once the channel list is known, the standby screen is the no-channel one.
+	if err := f.svc.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
 	if err := f.svc.ShowNoChannel(ctx); err != nil {
 		t.Fatalf("ShowNoChannel: %v", err)
 	}
@@ -317,6 +324,7 @@ func TestShowNoChannelWithoutAConfiguredImageStopsPlayback(t *testing.T) {
 	player := mpv.NewFake()
 	cfg := config.Default()
 	cfg.MPV.NoChannelImage = ""
+	cfg.MPV.BootingImage = ""
 	svc := NewService(cfg.ErsatzTV, cfg.MPV, Deps{
 		ErsatzTV: etv, Player: player, Clock: system.NewFakeClock(time.Now()), Logger: testLogger(),
 	})
@@ -356,9 +364,94 @@ func TestRestorePlaybackReloadsAfterAPlayerRestart(t *testing.T) {
 
 func TestRestorePlaybackShowsTheStaticImageWhenNothingWasSelected(t *testing.T) {
 	f := newFixture(t, chans()...)
-	f.svc.RestorePlayback(context.Background())
+	ctx := context.Background()
+	if err := f.svc.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	f.svc.RestorePlayback(ctx)
 	if !lastLoadIsNoChannel(t, f) {
 		t.Error("expected the no-channel image")
+	}
+}
+
+func TestBootingScreenShowsUntilTheChannelListLoads(t *testing.T) {
+	// ErsatzTV takes tens of seconds to come up. Until it has, telling the user
+	// to turn the channel knob would be inviting them to do something that
+	// cannot work, so the booting screen stays.
+	f := newFixture(t, chans()...)
+	ctx := context.Background()
+	f.etv.SetError(errors.New("ersatztv is still starting"))
+
+	if err := f.svc.ShowNoChannel(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !lastLoadIs(t, f, "booting.png") {
+		t.Fatalf("expected the booting screen, got %+v", f.player.CallsNamed("loadfile"))
+	}
+
+	// A failed refresh must not end the booting state.
+	_ = f.svc.Refresh(ctx)
+	if err := f.svc.ShowNoChannel(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !lastLoadIs(t, f, "booting.png") {
+		t.Error("a failed refresh should leave the booting screen up")
+	}
+
+	// ErsatzTV finishes starting: the screen swaps by itself, with no channel
+	// selected and nobody having touched anything.
+	f.etv.SetError(nil)
+	if err := f.svc.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !lastLoadIsNoChannel(t, f) {
+		t.Errorf("expected the swap to the no-channel screen, got %+v",
+			f.player.CallsNamed("loadfile"))
+	}
+}
+
+func TestBootingScreenGivesUpAfterTheDeadline(t *testing.T) {
+	// If ErsatzTV never comes up the device is not booting, something is broken.
+	// Claiming to still be booting forever would be a lie.
+	f := newFixture(t, chans()...)
+	ctx := context.Background()
+	f.etv.SetError(errors.New("ersatztv is not installed"))
+
+	if err := f.svc.ShowNoChannel(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !lastLoadIs(t, f, "booting.png") {
+		t.Fatal("expected the booting screen")
+	}
+
+	f.clock.Advance(2 * time.Minute)
+	if err := f.svc.ShowNoChannel(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !lastLoadIsNoChannel(t, f) {
+		t.Errorf("expected the no-channel screen past the deadline, got %+v",
+			f.player.CallsNamed("loadfile"))
+	}
+}
+
+func TestStandbyScreenIsNotReloadedRedundantly(t *testing.T) {
+	// Reloading the same image on every failed refresh would make the television
+	// flicker for no reason.
+	f := newFixture(t, chans()...)
+	ctx := context.Background()
+	f.etv.SetError(errors.New("down"))
+
+	if err := f.svc.ShowNoChannel(ctx); err != nil {
+		t.Fatal(err)
+	}
+	f.player.Reset()
+	for range 3 {
+		if err := f.svc.ShowNoChannel(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := len(f.player.CallsNamed("loadfile")); n != 0 {
+		t.Errorf("redundant reloads: %d", n)
 	}
 }
 
@@ -528,14 +621,19 @@ func TestChannelNumberInt(t *testing.T) {
 	}
 }
 
-func lastLoadIsNoChannel(t *testing.T, f *fixture) bool {
+func lastLoadIs(t *testing.T, f *fixture, suffix string) bool {
 	t.Helper()
 	loads := f.player.CallsNamed("loadfile")
 	if len(loads) == 0 {
 		return false
 	}
 	url, _ := loads[len(loads)-1].Args[1].(string)
-	return strings.HasSuffix(url, "no-channel.png")
+	return strings.HasSuffix(url, suffix)
+}
+
+func lastLoadIsNoChannel(t *testing.T, f *fixture) bool {
+	t.Helper()
+	return lastLoadIs(t, f, "no-channel.png")
 }
 
 func waitForWaiter(t *testing.T, clk *system.FakeClock) {

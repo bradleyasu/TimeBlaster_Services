@@ -255,6 +255,9 @@ Four systemd units, deliberately independent:
 ```text
 timeblaster.service        unprivileged (User=timeblaster), Restart=always
                            the alarm clock + web + hardware + media
+timeblaster-splash.service root, oneshot, very early. Paints the boot screen
+                           into the framebuffer and exits, so nothing holds DRM
+                           when mpv takes it
 timeblaster-wifi.service   root, socket-activated-style unix socket at
                            /run/timeblaster/wifi.sock, group-owned by timeblaster
 ersatztv.service           its own user, own restart policy, own failure domain
@@ -439,8 +442,10 @@ Order of operations:
 8. ErsatzTV: download the current `linux-arm64` tarball from GitHub releases into
    `/opt/ersatztv`, create the `ersatztv` user and unit, unless already installed at the
    same version.
-9. Console suppression on the TV: append `vt.global_cursor_default=0` / `consoleblank=0` to
-   `cmdline.txt` and note that a reboot is required — the script never reboots by itself.
+9. Make the television look like a product: quiet the kernel and systemd output,
+   move the console to an unseen VT, disable the login prompt on the VT the
+   television shows (moving it to Ctrl+Alt+F2), and install the boot screen.
+   A reboot is reported, never performed.
 10. `systemctl daemon-reload`, enable units, then print a status summary with next steps.
 
 Reruns re-verify and re-report; nothing is deleted, and user-modified files are preserved.

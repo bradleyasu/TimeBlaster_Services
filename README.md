@@ -43,6 +43,8 @@ with an Arduino Nano ESP32 as its hardware I/O controller.
 * **Plays television.** ErsatzTV turns folders of media into live channels; a
   potentiometer on the front selects between them; mpv drives HDMI directly with
   no desktop environment.
+* **Boots like an appliance.** No kernel messages, no `[ OK ]` lines, no login
+  prompt — a Timeblaster boot screen from early boot until the picture arrives.
 * **Is configured from your phone.** A PWA at `http://timeblaster.local` that
   installs to the Home Screen.
 * **Joins Wi-Fi with one gesture.** Hold a button for five seconds. That is the
@@ -132,7 +134,7 @@ internal/
 firmware/      the Arduino Nano ESP32 firmware (PlatformIO)
 deploy/        systemd units, config, udev, Avahi, assets
 docs/          documentation
-scripts/       asset generation
+scripts/       the shared bitmap font, asset generation, the boot screen
 ```
 
 ## Development

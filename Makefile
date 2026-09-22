@@ -56,8 +56,12 @@ build-pi: ## Cross-compile for the Raspberry Pi (linux/arm64)
 	@printf '\nBuilt for the Pi in $(BIN_DIR)/$(PI_GOOS)-$(PI_GOARCH)/\n'
 
 .PHONY: assets
-assets: ## Regenerate the PWA icons and the television standby image
+assets: ## Regenerate the PWA icons and the television screens
 	python3 scripts/make-assets.py
+
+.PHONY: splash-check
+splash-check: ## Report what the boot screen would paint (safe anywhere)
+	python3 scripts/timeblaster-splash --check
 
 .PHONY: clean
 clean: ## Remove build output

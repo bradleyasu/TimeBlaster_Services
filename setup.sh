@@ -11,6 +11,7 @@
 #
 # Useful flags:
 #   --skip-ersatztv     do not install or update ErsatzTV
+#   --keep-console      leave the Debian login prompt on the television
 #   --skip-packages     do not touch apt (for a rerun on a known-good system)
 #   --skip-build        do not rebuild the Go binaries
 #   --force-config      overwrite /etc/timeblaster/timeblaster.toml (backs it up)
@@ -44,6 +45,11 @@ readonly ERSATZTV_STATE="/var/lib/ersatztv"
 # Minimum Go version able to build this module.
 readonly GO_MIN_MAJOR=1
 readonly GO_MIN_MINOR=25
+
+KEEP_CONSOLE=0
+# The VT the television shows, and the one the rescue login moves to.
+CONSOLE_VT=1
+RESCUE_VT=2
 
 SKIP_ERSATZTV=0
 SKIP_PACKAGES=0
@@ -92,6 +98,7 @@ parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --skip-ersatztv) SKIP_ERSATZTV=1 ;;
+      --keep-console)  KEEP_CONSOLE=1 ;;
       --skip-packages) SKIP_PACKAGES=1 ;;
       --skip-build)    SKIP_BUILD=1 ;;
       --force-config)  FORCE_CONFIG=1 ;;
@@ -410,7 +417,7 @@ install_assets() {
   step "Installing assets"
 
   local src="${SCRIPT_DIR}/deploy/assets/no-channel.png"
-  if [[ ! -f "$src" ]]; then
+  if [[ ! -f "$src" || ! -f "${SCRIPT_DIR}/deploy/assets/booting.png" ]]; then
     info "generating the standby image"
     if command -v python3 >/dev/null 2>&1; then
       run python3 "${SCRIPT_DIR}/scripts/make-assets.py" \
@@ -422,10 +429,13 @@ install_assets() {
     fi
   fi
 
-  if [[ -f "$src" ]]; then
-    run install -m 0644 -o root -g root "$src" "${ASSETS_DIR}/no-channel.png"
-    ok "installed ${ASSETS_DIR}/no-channel.png"
-  fi
+  for asset in no-channel booting; do
+    local file="${SCRIPT_DIR}/deploy/assets/${asset}.png"
+    if [[ -f "$file" ]]; then
+      run install -m 0644 -o root -g root "$file" "${ASSETS_DIR}/${asset}.png"
+      ok "installed ${ASSETS_DIR}/${asset}.png"
+    fi
+  done
 
   # Alarm sounds. Any MP3 shipped with the source is copied in, but an existing
   # file is never overwritten: the user may have replaced it deliberately.
@@ -533,11 +543,18 @@ configure_hostname() {
 }
 
 configure_console() {
-  step "Keeping the Linux console off the television"
+  step "Making the television look like a product, not a Linux box"
 
-  # mpv covers the screen once it starts, but the boot messages and a blinking
-  # cursor are visible until then. Hiding the cursor and disabling console
-  # blanking makes the handover clean.
+  # Three separate things show on HDMI before mpv gets the display, and each
+  # needs its own fix:
+  #
+  #   1. kernel messages scrolling past        -> quiet, loglevel, logo.nologo
+  #   2. systemd's [ OK ] lines                -> systemd.show_status=false
+  #   3. the Debian login prompt               -> disable the getty on that VT
+  #
+  # The third is the one that actually matters: without it the television shows
+  # a login prompt forever if the daemon ever fails to start.
+
   local cmdline=""
   for candidate in /boot/firmware/cmdline.txt /boot/cmdline.txt; do
     [[ -f "$candidate" ]] && { cmdline="$candidate"; break; }
@@ -545,29 +562,124 @@ configure_console() {
 
   if [[ -z "$cmdline" ]]; then
     skip "no cmdline.txt found; not a Raspberry Pi boot layout"
+  else
+    # console=tty3 moves kernel output to a VT the television never shows, so
+    # anything that does slip past `quiet` lands out of sight.
+    local -a opts=(
+      "console=tty3"
+      "quiet"
+      "loglevel=3"
+      "logo.nologo"
+      "vt.global_cursor_default=0"
+      "consoleblank=0"
+      "systemd.show_status=false"
+    )
+
+    local added=0
+    for opt in "${opts[@]}"; do
+      # Match on the key so console=tty1 is replaced rather than duplicated.
+      local key="${opt%%=*}"
+      if [[ "$opt" == *=* ]] && grep -qE "(^| )${key}=" "$cmdline"; then
+        continue
+      fi
+      if [[ "$opt" != *=* ]] && grep -qw -- "$opt" "$cmdline"; then
+        continue
+      fi
+      if (( DRY_RUN )); then
+        info "[dry-run] would append ${opt} to ${cmdline}"
+      else
+        # cmdline.txt must remain a single line.
+        sed -i "1s|\$| ${opt}|" "$cmdline"
+      fi
+      added=$((added + 1))
+    done
+
+    if (( added > 0 )); then
+      ok "added ${added} kernel option(s) to ${cmdline}"
+      note "The quiet-boot changes take effect after a reboot."
+      REBOOT_REQUIRED=1
+    else
+      skip "${cmdline} already has the quiet-boot options"
+    fi
+  fi
+
+  configure_getty
+  install_splash
+}
+
+# configure_getty takes the login prompt off the television.
+#
+# The getty on tty1 is disabled and one on tty2 is enabled in its place, so the
+# screen stays clean but a keyboard is still a way in: Ctrl+Alt+F2 reaches a
+# login. SSH and the serial console are untouched.
+configure_getty() {
+  if (( KEEP_CONSOLE )); then
+    skip "leaving the console login in place (--keep-console)"
     return
   fi
 
-  local added=0
-  for opt in "vt.global_cursor_default=0" "consoleblank=0" "logo.nologo"; do
-    if grep -qw -- "$opt" "$cmdline"; then
-      continue
-    fi
-    if (( DRY_RUN )); then
-      info "[dry-run] would append ${opt} to ${cmdline}"
-    else
-      # cmdline.txt must remain a single line.
-      sed -i "1s|\$| ${opt}|" "$cmdline"
-    fi
-    added=$((added + 1))
-  done
-
-  if (( added > 0 )); then
-    ok "added ${added} kernel option(s) to ${cmdline}"
-    note "The console changes take effect after a reboot."
+  if systemctl is-enabled "getty@tty${CONSOLE_VT}.service" >/dev/null 2>&1; then
+    run systemctl disable "getty@tty${CONSOLE_VT}.service"
+    ok "disabled the login prompt on tty${CONSOLE_VT} (the television's VT)"
     REBOOT_REQUIRED=1
   else
-    skip "${cmdline} already has the console options"
+    skip "no login prompt enabled on tty${CONSOLE_VT}"
+  fi
+  # Stopping it as well means the change is visible without waiting for a boot.
+  if systemctl is-active --quiet "getty@tty${CONSOLE_VT}.service" 2>/dev/null; then
+    run systemctl stop "getty@tty${CONSOLE_VT}.service"
+  fi
+
+  # The escape hatch. Without this, a Pi with no network and no serial console
+  # would have no way in at all.
+  if systemctl is-enabled "getty@tty${RESCUE_VT}.service" >/dev/null 2>&1; then
+    skip "rescue login already available on tty${RESCUE_VT}"
+  else
+    run systemctl enable "getty@tty${RESCUE_VT}.service"
+    ok "enabled a rescue login on tty${RESCUE_VT} (reach it with Ctrl+Alt+F${RESCUE_VT})"
+  fi
+  note "Local login moved to Ctrl+Alt+F${RESCUE_VT}; SSH is unaffected."
+}
+
+# install_splash installs the boot screen and its shared drawing module.
+install_splash() {
+  local lib_dir="/usr/local/lib/timeblaster"
+
+  run install -d -m 0755 "$lib_dir"
+  run install -m 0644 -o root -g root "${SCRIPT_DIR}/scripts/tbdisplay.py" "${lib_dir}/tbdisplay.py"
+  run install -m 0755 -o root -g root "${SCRIPT_DIR}/scripts/timeblaster-splash" "${BIN_DIR}/timeblaster-splash"
+  ok "installed the boot screen to ${BIN_DIR}/timeblaster-splash"
+
+  local src="${SCRIPT_DIR}/deploy/systemd/timeblaster-splash.service"
+  local dst="${SYSTEMD_DIR}/timeblaster-splash.service"
+  if [[ -f "$dst" ]] && cmp -s "$src" "$dst"; then
+    skip "timeblaster-splash.service is already current"
+  else
+    run install -m 0644 -o root -g root "$src" "$dst"
+    run systemctl daemon-reload
+    ok "installed timeblaster-splash.service"
+  fi
+
+  if systemctl is-enabled timeblaster-splash.service >/dev/null 2>&1; then
+    skip "timeblaster-splash.service is already enabled"
+  else
+    run systemctl enable timeblaster-splash.service
+    ok "enabled the boot screen"
+  fi
+
+  # Report whether it can actually paint, since a missing framebuffer is the
+  # one thing that silently turns this into a black screen.
+  if (( DRY_RUN )); then
+    return
+  fi
+  if [[ -e /dev/fb0 ]]; then
+    local geom
+    geom="$("${BIN_DIR}/timeblaster-splash" --check 2>/dev/null | head -1 || true)"
+    ok "boot screen target: ${geom:-/dev/fb0}"
+  else
+    warn "no /dev/fb0, so the boot screen cannot be painted. The television will"
+    warn "  simply stay dark until mpv starts, which is harmless. On Raspberry Pi"
+    warn "  OS this usually means fbdev emulation is off in the KMS overlay."
   fi
 }
 

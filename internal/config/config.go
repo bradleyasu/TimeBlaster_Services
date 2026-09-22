@@ -236,6 +236,16 @@ type MPV struct {
 	// NoChannelImage is shown fullscreen whenever no channel is selected, which is
 	// what keeps a Linux console off the television.
 	NoChannelImage string `toml:"no_channel_image"`
+	// BootingImage is shown instead, from startup until the channel list has
+	// been read for the first time. It is the same screen the boot splash
+	// paints, so the handover from framebuffer to mpv is invisible -- and it
+	// avoids telling the user to turn the channel knob before any channels
+	// exist. Empty falls back to NoChannelImage.
+	BootingImage string `toml:"booting_image"`
+	// BootingTimeout caps how long the booting screen may stay up. Past it the
+	// no-channel screen is shown even if the channel list never loaded, because
+	// at that point the device is not booting, something is wrong.
+	BootingTimeout Duration `toml:"booting_timeout"`
 	// RestartMinBackoff and RestartMaxBackoff bound the mpv restart loop.
 	RestartMinBackoff Duration `toml:"restart_min_backoff"`
 	RestartMaxBackoff Duration `toml:"restart_max_backoff"`
@@ -413,6 +423,8 @@ func Default() Config {
 				"--audio-device=auto",
 			},
 			NoChannelImage:    "/usr/share/timeblaster/assets/no-channel.png",
+			BootingImage:      "/usr/share/timeblaster/assets/booting.png",
+			BootingTimeout:    Dur(90 * time.Second),
 			RestartMinBackoff: Dur(time.Second),
 			RestartMaxBackoff: Dur(30 * time.Second),
 			StartupTimeout:    Dur(15 * time.Second),

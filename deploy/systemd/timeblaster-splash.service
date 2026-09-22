@@ -1,0 +1,51 @@
+# Paints the Timeblaster boot screen on the television.
+#
+# It runs once, writes the image into the framebuffer, and exits. Nothing is
+# left holding the display, so when timeblasterd's mpv takes DRM master the
+# image is simply replaced -- no race, and no black flash on the handover.
+#
+# Between this and the console suppression setup.sh configures (no kernel
+# messages, no systemd status, no getty on the television's VT), the set shows
+# the Timeblaster screen from early boot until the daemon has the picture.
+
+[Unit]
+Description=Timeblaster boot screen
+Documentation=file:/usr/share/doc/timeblaster/hardware.md
+DefaultDependencies=no
+After=local-fs.target
+Before=timeblaster.service basic.target shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+# The image stays in the framebuffer after the process exits, so systemd should
+# consider the unit active rather than failed.
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/timeblaster-splash
+
+# A boot screen is cosmetic. It must never be able to delay or fail a boot, let
+# alone one that is about to start an alarm clock.
+TimeoutStartSec=15
+SuccessExitStatus=0 1
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=timeblaster-splash
+
+# Writing the framebuffer and switching VTs needs root, but nothing else does.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+PrivateNetwork=yes
+# The splash opens no sockets, but leaving AF_UNIX available avoids a silent
+# failure if the Python runtime wants one during startup. A boot screen must
+# never be the reason a boot goes wrong.
+RestrictAddressFamilies=AF_UNIX
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryMax=64M
+
+[Install]
+WantedBy=sysinit.target

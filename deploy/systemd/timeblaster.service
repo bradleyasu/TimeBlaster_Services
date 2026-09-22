@@ -8,10 +8,10 @@
 [Unit]
 Description=Timeblaster alarm clock and controller
 Documentation=file:/usr/share/doc/timeblaster/architecture.md
-After=network.target sound.target time-sync.target
+After=network.target sound.target time-sync.target timeblaster-splash.service
 # ErsatzTV is deliberately only a "Wants": the alarm clock must start, and keep
 # running, whether or not the television stack is healthy.
-Wants=ersatztv.service timeblaster-wifi.service
+Wants=ersatztv.service timeblaster-wifi.service timeblaster-splash.service
 
 [Service]
 Type=simple

@@ -155,6 +155,8 @@ alternative output configurations.
 | `ipc_socket` | `/run/timeblaster/mpv-tv.sock` | Channel changes go over this, not a restart. |
 | `args` | DRM/KMS, fullscreen, idle | `--input-ipc-server` is added automatically; do not list it. |
 | `no_channel_image` | `/usr/share/timeblaster/assets/no-channel.png` | Keeps the console off the television. |
+| `booting_image` | `/usr/share/timeblaster/assets/booting.png` | Shown until the channel list first loads. The same screen the boot splash paints, so the handover is invisible. Empty falls back to the no-channel image. |
+| `booting_timeout` | `"1m30s"` | How long the booting screen may stay up before giving way to the no-channel screen. |
 | `restart_min_backoff` / `restart_max_backoff` | `1s` / `30s` | |
 | `startup_timeout` | `"15s"` | How long to wait for the IPC socket. |
 | `command_timeout` | `"5s"` | |

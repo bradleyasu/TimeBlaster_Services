@@ -276,14 +276,79 @@ ls /sys/class/drm/            # card1-HDMI-A-1, card1-HDMI-A-2, …
 args = […, "--drm-connector=HDMI-A-1"]
 ```
 
-### The Linux console is visible
+### The Linux console or a login prompt is visible
+
+What should happen on a finished install: dark, then the Timeblaster boot
+screen, then the standby screen. No kernel messages, no `[ OK ]` lines, no login
+prompt, ever.
 
 ```bash
-grep -o 'vt.global_cursor_default=[01]' /boot/firmware/cmdline.txt
+cat /boot/firmware/cmdline.txt
+systemctl is-enabled getty@tty1.service     # should be: disabled
+systemctl is-enabled getty@tty2.service     # should be: enabled (the rescue login)
+systemctl status timeblaster-splash.service
 ```
 
-`setup.sh` adds `vt.global_cursor_default=0 consoleblank=0 logo.nologo`, which
-take effect after a reboot. mpv covers the screen once it starts.
+| What you see | Cause | Fix |
+| --- | --- | --- |
+| A `login:` prompt | The getty on the television's VT is still enabled | `sudo systemctl disable --now getty@tty1.service` |
+| Kernel messages scrolling | `quiet`/`console=tty3` missing from `cmdline.txt` | Rerun `sudo ./setup.sh`, then reboot |
+| Green `[ OK ]` lines | `systemd.show_status=false` missing | As above |
+| A blinking cursor | `vt.global_cursor_default=0` missing | As above |
+| The Raspberry Pi logos | `logo.nologo` missing | As above |
+
+All of the `cmdline.txt` options need a reboot. `setup.sh` never reboots by
+itself; it tells you when one is needed.
+
+**Note that the local login moves rather than disappearing.** Press
+**Ctrl+Alt+F2** for a console. SSH and the serial console are untouched. To put
+it back on the television's VT, rerun with `--keep-console` or:
+
+```bash
+sudo systemctl enable --now getty@tty1.service
+```
+
+### The boot screen does not appear
+
+The screen is painted straight into the framebuffer and the process then exits,
+so nothing is holding the display when mpv starts. The usual cause of a blank
+boot is that there is no framebuffer to paint into.
+
+```bash
+sudo timeblaster-splash --check        # reports geometry, paints nothing
+ls -l /dev/fb0
+journalctl -u timeblaster-splash.service -b
+```
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| `no framebuffer at /dev/fb0` | fbdev emulation is off | Check `dtoverlay=vc4-kms-v3d` in `/boot/firmware/config.txt`; the boot stays dark but the television is otherwise fine |
+| `unsupported framebuffer depth` | The screen is not 16- or 32-bit | Harmless; the boot stays dark |
+| It appears, then the screen goes dark for a while | Normal — mpv is starting | If it lasts more than ~15 s, see [The television is black](#the-television-is-black) |
+| It stays up for good | The daemon never got the display | `tbctl health` → `tv_player` |
+
+Paint it by hand to check the whole path end to end:
+
+```bash
+sudo systemctl stop timeblaster.service
+sudo timeblaster-splash --text "HELLO"
+sudo timeblaster-splash --clear
+sudo systemctl start timeblaster.service
+```
+
+### The television says "BOOTING, PLEASE STAND BY..." long after boot
+
+That screen stays up until the channel list has been read for the first time,
+because telling you to turn the channel knob before ErsatzTV has any channels
+would be inviting you to do something that cannot work. After
+`mpv.booting_timeout` (default 90 s) it gives way to the standby screen anyway.
+
+So a boot screen that lingers means ErsatzTV has not come up:
+
+```bash
+tbctl health                     # ersatztv
+systemctl status ersatztv.service
+```
 
 ### Video stutters or drops frames
 

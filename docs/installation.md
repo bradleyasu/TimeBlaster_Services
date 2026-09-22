@@ -43,8 +43,13 @@ upgrade, re-verify, or reprint the status summary.
 8. **Installs assets** — the standby image, the udev rule that creates
    `/dev/timeblaster-nano`, and the Avahi service file.
 9. **Sets the hostname** to `timeblaster` and configures mDNS.
-10. **Hides the Linux console** on the television by adding
-    `vt.global_cursor_default=0 consoleblank=0 logo.nologo` to `cmdline.txt`.
+10. **Makes the television look like a product**, not a Linux box:
+    * quiets the boot — `console=tty3 quiet loglevel=3 logo.nologo
+      vt.global_cursor_default=0 consoleblank=0 systemd.show_status=false`;
+    * **disables the login prompt** on the VT the television shows, moving the
+      local console login to Ctrl+Alt+F2;
+    * installs a boot screen that paints **TIMEBLASTER — BOOTING, PLEASE STAND
+      BY...** from early boot until mpv has the picture.
 11. **Installs ErsatzTV** — downloads the current `linux-arm64` release into
     `/opt/ersatztv` and creates its own service with its own user. Skipped if the
     same version is already installed.
@@ -57,6 +62,7 @@ says so and leaves the decision to you.
 
 ```bash
 sudo ./setup.sh --dry-run          # print the plan, change nothing
+sudo ./setup.sh --keep-console     # leave the Debian login prompt on the TV
 sudo ./setup.sh --skip-ersatztv    # alarm clock only, no television
 sudo ./setup.sh --skip-packages    # reruns on a known-good system
 sudo ./setup.sh --skip-build       # reinstall config and units, keep binaries
@@ -70,6 +76,18 @@ sudo ./setup.sh --uninstall        # stop and disable the services, keep all dat
 
 ```bash
 sudo reboot
+```
+
+The quiet-boot and login-prompt changes only take effect after this. On the next
+boot the television should go from dark, to the Timeblaster boot screen, to the
+standby screen — with no kernel messages and no login prompt at any point.
+
+**Getting a local login afterwards.** The prompt moves off the television's
+virtual terminal, so press **Ctrl+Alt+F2** for one. SSH and the serial console
+are unchanged. Reverse it entirely with `sudo ./setup.sh --keep-console`, or:
+
+```bash
+sudo systemctl enable --now getty@tty1.service
 ```
 
 ### 2. Add alarm sounds

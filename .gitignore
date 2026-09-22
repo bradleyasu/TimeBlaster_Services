@@ -13,6 +13,10 @@ coverage.out
 coverage.html
 *.test
 
+# Python bytecode from the asset and splash scripts
+__pycache__/
+*.pyc
+
 # Editor and OS noise
 .DS_Store
 *.swp
