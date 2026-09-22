@@ -647,3 +647,28 @@ func waitForWaiter(t *testing.T, clk *system.FakeClock) {
 	}
 	t.Fatal("no timer was registered")
 }
+
+func TestStandbyImageBeforeThePlayerIsUpIsNotAnError(t *testing.T) {
+	// At startup the daemon puts something on screen before mpv has finished
+	// claiming the display. That is normal and self-correcting, so it must not
+	// produce a red line in every boot -- but it must still be reported to the
+	// caller, and recorded, so a genuinely stuck player is still visible.
+	f := newFixture(t, chans()...)
+	f.player.NotAlive = true
+
+	err := f.svc.ShowNoChannel(context.Background())
+	if !errors.Is(err, mpv.ErrNotConnected) {
+		t.Fatalf("got %v, want mpv.ErrNotConnected", err)
+	}
+	if f.svc.Status().LastError == "" {
+		t.Error("the failure should still be recorded in status")
+	}
+
+	// And once mpv connects, the supervisor's restore puts it right.
+	f.player.NotAlive = false
+	f.svc.RestorePlayback(context.Background())
+	if !lastLoadIs(t, f, "booting.png") {
+		t.Errorf("expected the standby screen after the player came up, got %+v",
+			f.player.CallsNamed("loadfile"))
+	}
+}

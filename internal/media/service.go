@@ -385,7 +385,17 @@ func (s *Service) ShowNoChannel(ctx context.Context) error {
 		s.mu.Lock()
 		s.lastErr = err
 		s.mu.Unlock()
-		s.log.Error("could not display the no-channel image", "image", image, "error", err)
+		if errors.Is(err, mpv.ErrNotConnected) {
+			// Normal at startup: the daemon puts something on screen as early as
+			// it can, which is usually a second or two before mpv has finished
+			// claiming the display. The supervisor restores playback the moment
+			// it connects, so this corrects itself. Logging it as an error would
+			// put a red line in every single boot and teach you to ignore them.
+			s.log.Debug("player not ready for the standby image yet; "+
+				"it will be restored when mpv connects", "image", image)
+		} else {
+			s.log.Error("could not display the no-channel image", "image", image, "error", err)
+		}
 		return fmt.Errorf("media: loading %s: %w", image, err)
 	}
 
