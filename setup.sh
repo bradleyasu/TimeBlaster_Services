@@ -67,10 +67,6 @@ DRY_RUN=0
 # Resolved by ensure_go before the build.
 GO_BIN=""
 
-# Set whenever any unit file is written, so systemd is reloaded exactly once
-# before the services are enabled and started.
-UNITS_CHANGED=0
-
 REBOOT_REQUIRED=0
 declare -a WARNINGS=()
 declare -a NOTES=()
@@ -690,7 +686,6 @@ install_splash() {
     skip "timeblaster-splash.service is already current"
   else
     run install -m 0644 -o root -g root "$src" "$dst"
-    UNITS_CHANGED=1
     run systemctl daemon-reload
     ok "installed timeblaster-splash.service"
   fi
@@ -851,11 +846,6 @@ ensure_ersatztv_service() {
     skip "ersatztv.service is already current"
   else
     run install -m 0644 -o root -g root "$src" "$dst"
-    # Without this, install_services only reloaded systemd when one of the
-    # *timeblaster* units changed, so a change here landed on disk and was then
-    # ignored -- systemd even warns about it, and the restart below reran the
-    # stale unit.
-    UNITS_CHANGED=1
     ok "installed ersatztv.service"
   fi
 }
@@ -976,10 +966,13 @@ install_services() {
     changed=1
   done
 
-  if (( changed || UNITS_CHANGED )) || ! systemctl is-enabled timeblaster.service >/dev/null 2>&1; then
-    run systemctl daemon-reload
-    ok "reloaded systemd"
-  fi
+  # Unconditionally. Gating this was a bug factory: a unit could be correct on
+  # disk while systemd still ran a stale copy, which is exactly what happened
+  # when ersatztv.service was rewritten by a run that then decided nothing had
+  # changed. A reload costs a few hundred milliseconds and is idempotent, so
+  # there is nothing to gain by being clever about it.
+  run systemctl daemon-reload
+  ok "reloaded systemd"
 
   for unit in timeblaster-wifi.service timeblaster.service; do
     if systemctl is-enabled "$unit" >/dev/null 2>&1; then
