@@ -84,7 +84,7 @@ TB1|16|BUTTON|ALARM_OFF|DOWN
 | `ALARM` | `ACTIVE`, `0`\|`1` | Whether an alarm is ringing. |
 | `DISPLAY` | `TEXT`, text | Show literal text instead of the clock. |
 | `DISPLAY` | `CLOCK` | Return to the clock. |
-| `DISPLAY` | `BRIGHTNESS`, 0–100 | Display brightness. |
+| `DISPLAY` | `BRIGHTNESS`, 0–100 | Display brightness. On the current board there is no hardware dimming: 0 blanks the display, anything else turns it on. See [hardware.md](hardware.md#display). |
 | `LED` | name, `0`\|`1` | Set a named LED: `ALARM`, `WIFI`, `POWER`. |
 | `CONFIG` | key, value | A firmware tunable. Currently only `pot_threshold`. |
 
@@ -109,7 +109,7 @@ What the Nano does own is everything that benefits from being close to the metal
 
 * 16× oversampling and an EMA over the noisy ESP32 ADC;
 * 25 ms button debouncing;
-* display multiplexing and brightness PWM;
+* clocking frames into the display's 74HC595 chain;
 * free-running the clock between time syncs.
 
 ## Time synchronisation

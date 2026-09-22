@@ -67,8 +67,16 @@ clean: ## Remove build output
 # --- Test -------------------------------------------------------------------
 
 .PHONY: test
-test: ## Run all tests with the race detector
+test: ## Run all Go tests with the race detector
 	go test -race -timeout 300s ./...
+
+.PHONY: firmware-test
+firmware-test: ## Run the Arduino firmware's host tests (no board required)
+	@$(MAKE) --no-print-directory -C firmware/timeblaster-nano test
+
+.PHONY: firmware-fixture
+firmware-fixture: ## Regenerate the protocol fixture from the firmware encoder
+	@$(MAKE) --no-print-directory -C firmware/timeblaster-nano fixture
 
 .PHONY: test-short
 test-short: ## Run tests without the race detector (faster)
@@ -123,7 +131,7 @@ tidy: ## Tidy and verify go.mod
 	go mod verify
 
 .PHONY: check
-check: lint test ## Everything CI would run
+check: lint test firmware-test ## Everything CI would run
 
 # --- Run locally ------------------------------------------------------------
 
@@ -199,11 +207,16 @@ health: ## Query the health endpoint on the Pi
 
 .PHONY: firmware
 firmware: ## Print how to build and upload the Nano firmware
-	@printf '\nThe Nano firmware is an Arduino sketch:\n'
-	@printf '  firmware/timeblaster-nano/timeblaster-nano.ino\n\n'
-	@printf 'With arduino-cli:\n'
-	@printf '  arduino-cli core install arduino:esp32\n'
-	@printf '  arduino-cli compile --fqbn arduino:esp32:nano_nora firmware/timeblaster-nano\n'
-	@printf '  arduino-cli upload  --fqbn arduino:esp32:nano_nora -p /dev/ttyACM0 firmware/timeblaster-nano\n\n'
-	@printf 'Or open the sketch in the Arduino IDE and select "Arduino Nano ESP32".\n'
-	@printf 'See docs/hardware.md for wiring.\n\n'
+	@printf '\nThe Nano firmware is a PlatformIO project:\n'
+	@printf '  firmware/timeblaster-nano/\n\n'
+	@printf 'Build and flash:\n'
+	@printf '  cd firmware/timeblaster-nano\n'
+	@printf '  pio run                 # build\n'
+	@printf '  pio run -t upload       # flash\n'
+	@printf '  pio device monitor      # watch the TB1 link\n\n'
+	@printf 'Stop the daemon first; the serial port takes one reader:\n'
+	@printf '  sudo systemctl stop timeblaster.service\n\n'
+	@printf 'Host tests, no board required:\n'
+	@printf '  make firmware-test\n\n'
+	@printf 'See docs/hardware.md for wiring and firmware/timeblaster-nano/README.md\n'
+	@printf 'for why the display driver must not be edited in place.\n\n'

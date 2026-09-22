@@ -210,6 +210,41 @@ Three conventions worth keeping:
 3. **Comment the non-obvious assertion.** A future reader should not have to
    reconstruct why a particular number matters.
 
+## The firmware's own tests
+
+The Arduino firmware has host-side tests that need no board:
+
+```bash
+make firmware-test          # from the repository root
+make -C firmware/timeblaster-nano test
+```
+
+The Arduino API is stubbed, and the stub **captures every bit clocked into the
+display's shift-register chain**. That turns the three things most likely to be
+silently wrong — the segment bit order, the active-low polarity, and the
+right-to-left digit order — into concrete byte assertions:
+
+```text
+"12.30"  ->  0x11 0x23 0x28 0xB7
+```
+
+They also assert that nothing claims the display's `D5`, `D6` or `D7`. An LED on
+DATA or CLOCK would corrupt every frame, and that mistake is invisible until the
+hardware is assembled.
+
+### Interoperability between Go and the firmware
+
+The TB1 wire format is implemented twice. Three tests hold the two together:
+
+| Test | Checks |
+| --- | --- |
+| `TestCRCMatchesTheFirmwareImplementation` | The Go CRC against a transcription of the firmware's, across every byte value |
+| `TestDecodesRealFirmwareOutput` | Go decodes real bytes captured from the firmware's encoder |
+| `TestGoEncoderMatchesTheFirmwareByteForByte` | Both encoders produce identical output |
+
+The fixture at `internal/protocol/testdata/firmware-frames.bin` is genuine
+firmware output, regenerated with `make -C firmware/timeblaster-nano fixture`.
+
 ## The race detector
 
 `make test` always enables it. The concurrency here is real — a serial read loop,
@@ -228,9 +263,10 @@ Honestly stated, because these are the parts to check by hand on real hardware:
   tested; whether a specific USB speaker honours them is not.
 * **NetworkManager's real behaviour.** Parsing and command generation are tested
   against captured output; the actual radio is not.
-* **The Arduino firmware.** The protocol is cross-checked against the Go
-  implementation, but the firmware has no test harness of its own. Verify it on
-  the bench with `picocom`, as described in
-  [serial-protocol.md](serial-protocol.md#debugging-by-hand).
+* **Real 74HC595 and ADC timing.** The firmware's host tests assert the exact
+  bytes clocked into the shift-register chain, but not that the parts meet
+  their setup and hold times at the driver's chosen delays.
+* **That the physical wiring matches `Pins.h`.** The tests catch two pins
+  claimed by different peripherals; they cannot know what is actually soldered.
 * **Long-running behaviour.** Multi-day DST transitions and week-long uptime are
   simulated with the fake clock, not observed.

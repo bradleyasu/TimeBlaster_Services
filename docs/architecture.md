@@ -98,7 +98,7 @@ flowchart TB
 │   │   └── static/            # the PWA, embedded into the binary at build time
 │   ├── wifi/                  # helper protocol, client, server implementation, portal
 │   └── wsocket/               # WebSocket hub and event fan-out
-├── firmware/timeblaster-nano/ # Arduino Nano ESP32 sketch
+├── firmware/timeblaster-nano/ # Arduino Nano ESP32 firmware (PlatformIO)
 ├── deploy/                    # systemd units, config, udev, avahi, assets
 ├── docs/                      # this file and friends
 └── scripts/                   # helper scripts used by setup.sh and the Makefile

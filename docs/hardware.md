@@ -36,7 +36,9 @@ I/O controller and owns no policy. See
 | 4 × 10 kΩ linear potentiometers | Linear (B taper), not logarithmic. |
 | 1 × momentary push button | Wi-Fi setup. |
 | 1 × large momentary button, red | Alarm Off. The big one on top. |
-| 4-digit 7-segment display, common cathode | Or a TM1637/MAX7219 module; see [Display](#display). |
+| 2 × HDSP-K511 dual-digit displays | Common anode, 4 digits total. |
+| 4 × 74HC595 shift registers | One per digit; see [Display](#display). |
+| 32 × 360 Ω resistors | One per segment, decimal points included. |
 | 3 × LEDs plus 220 Ω resistors | Alarm, Wi-Fi, Power. |
 | HDMI cable | Pi → television. |
 
@@ -110,29 +112,58 @@ Each LED: pin → 220 Ω → LED anode, cathode → GND.
 | LED | Pin | Meaning |
 | --- | --- | --- |
 | `ALARM` | `D4` | Blinks while an alarm is ringing. |
-| `WIFI` | `D5` | On while in Wi-Fi setup mode. |
-| `POWER` | `D6` | On whenever the firmware is running. |
+| `WIFI` | `D8` | On while in Wi-Fi setup mode. |
+| `POWER` | `D9` | On whenever the firmware is running. |
+
+`D5`, `D6` and `D7` are **not available**: they carry the display's DATA, CLOCK
+and LATCH. An LED on DATA or CLOCK would corrupt every display frame, so the
+firmware's host tests assert that nothing else claims them.
 
 The Pi addresses LEDs by **name**, never by pin, so rewiring never requires a
 change on the Pi.
 
 ### Display
 
-The reference wiring is a directly driven 4-digit common-cathode display:
+The display is driven by a **74HC595 shift-register chain**, one register per
+digit, on the Timeblaster PCB. Three signals, no multiplexing:
 
 | Signal | Pin |
 | --- | --- |
-| Segments a–g | `D7`–`D13` |
-| Decimal point | `A7` |
-| Digit enables 1–4 | `A4`, `A5`, `A6`, `D1` |
+| DATA (`SER`) | `D5` |
+| CLOCK (`SRCLK`) | `D6` |
+| LATCH (`RCLK`) | `D7` |
 
-Segments are current-limited by 220 Ω resistors on each segment line.
+| | |
+| --- | --- |
+| Registers | 4 × 74HC595, daisy-chained, one per digit |
+| Display | 2 × HDSP-K511 dual-digit, **common anode** |
+| Polarity | **Active low** — a 0 bit lights a segment |
+| Current limiting | 32 × 360 Ω, one per segment including the decimal points |
+| Digit order | The first byte clocked out travels furthest and lands on the **rightmost** digit |
+| Connector | J2, 5 pins: 3V3, GND, DATA, CLOCK, LATCH |
 
-**Using a driver module instead.** A TM1637 or MAX7219 board is fewer wires and
-no multiplexing. To switch, replace only three functions in the firmware —
-`displayInit()`, `displayRefresh()` and the brightness handling — and leave the
-rest alone. Nothing above those functions, and nothing at all on the Pi, knows
-how the display is driven.
+Because the registers latch and hold, there is **no refresh loop**: a frame is
+clocked out once and stays lit until the next one. Driving it costs roughly
+200 µs and only happens when the content actually changes.
+
+The segment bit order is the driver's own, and is deliberately **not** the
+conventional `a`=bit0 layout:
+
+```text
+bit  7    6    5    4    3    2    1    0
+     A    B    F    G    C    D    E    DP
+```
+
+**Brightness.** The registers' `~OE` is tied low on the board and is not brought
+out on J2, so there is **no hardware dimming**. The protocol's
+`DISPLAY|BRIGHTNESS` message is honoured as far as the hardware allows: 0 blanks
+the display, anything else turns it on. To get real dimming, wire `~OE` to a
+PWM-capable pin and set `DISPLAY_OE_PIN` in `firmware/timeblaster-nano/src/Pins.h`.
+
+**The driver is vendored, not written here.** `src/SevenSegment.{h,cpp}` is
+copied byte for byte from the working TimeblasterClock project and must not be
+edited in place — see
+[firmware/timeblaster-nano/README.md](../firmware/timeblaster-nano/README.md).
 
 ## Raspberry Pi connections
 
@@ -199,13 +230,21 @@ Most builds need no calibration. If a knob cannot reach one extreme:
 
 ## Flashing the firmware
 
+The firmware is a PlatformIO project, matching the toolchain the display driver
+was developed and proven with:
+
 ```bash
-arduino-cli core install arduino:esp32
-arduino-cli compile --fqbn arduino:esp32:nano_nora firmware/timeblaster-nano
-arduino-cli upload  --fqbn arduino:esp32:nano_nora -p /dev/ttyACM0 firmware/timeblaster-nano
+cd firmware/timeblaster-nano
+pio run                 # build
+pio run -t upload       # flash
+pio device monitor      # watch the link
 ```
 
-Or open the sketch in the Arduino IDE and select **Arduino Nano ESP32**.
+It also has host-side tests that need no board at all:
+
+```bash
+make -C firmware/timeblaster-nano test
+```
 
 Stop `timeblaster.service` before flashing: the serial port takes one reader, and
 the daemon holds it.

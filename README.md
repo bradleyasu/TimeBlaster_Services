@@ -129,7 +129,7 @@ internal/
   web/         HTTP API and the embedded PWA
   wifi/        helper RPC, nmcli, captive portal
   wsocket/     WebSocket fan-out
-firmware/      the Arduino Nano ESP32 sketch
+firmware/      the Arduino Nano ESP32 firmware (PlatformIO)
 deploy/        systemd units, config, udev, Avahi, assets
 docs/          documentation
 scripts/       asset generation
@@ -141,8 +141,9 @@ Everything runs on an ordinary Mac or Linux machine. No Raspberry Pi, no Arduino
 no mpv, no ErsatzTV, no sound card.
 
 ```bash
-make test           # full suite with the race detector
-make check          # lint + test, what CI would run
+make test           # full Go suite with the race detector
+make firmware-test  # the Arduino firmware's host tests, no board required
+make check          # lint + both test suites, what CI would run
 make dev            # run the daemon locally against a scratch config
 make build-pi       # cross-compile for linux/arm64
 make deploy PI=timeblaster.local
@@ -164,8 +165,12 @@ told.
 | Time, timezone, alarms, scheduling, dismissal | Reading potentiometers and buttons |
 | Alarm audio and volume mapping | ADC oversampling and smoothing |
 | Which channel a knob position means | Button debouncing |
-| The five-second hold that enters Wi-Fi setup | Driving the 7-segment display and LEDs |
+| The five-second hold that enters Wi-Fi setup | Clocking frames into the display's 74HC595 chain |
 | Configuration, persistence, the web app | Free-running the clock between syncs |
+
+The display driver (`SevenSegment.{h,cpp}`) is vendored **byte for byte** from
+the working TimeblasterClock project and must not be edited in place; see
+[firmware/timeblaster-nano/README.md](firmware/timeblaster-nano/README.md).
 
 The Nano deliberately does **not** know that pot 0 selects channels, that a
 five-second hold means anything, or when an alarm should ring. Keeping that on the
