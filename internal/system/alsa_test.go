@@ -87,14 +87,31 @@ func TestSelectALSACardNoCards(t *testing.T) {
 	}
 }
 
-func TestSelectALSACardFallsBackToFirstWhenNoUSB(t *testing.T) {
+func TestSelectALSACardRefusesToGuessWhenNoUSBIsPresent(t *testing.T) {
+	// The failure this prevents: on a Pi with nothing plugged in the first card
+	// is HDMI, so falling back to it would route the alarm to the television and
+	// then report itself healthy. Being told to plug the speaker in is far
+	// better than an alarm you cannot hear.
 	cards := ParseALSACards(sampleCards)[:2] // HDMI only
-	got, err := SelectALSACard(cards, "")
-	if err != nil {
-		t.Fatalf("err: %v", err)
+	_, err := SelectALSACard(cards, "")
+	if !errors.Is(err, ErrNoALSACard) {
+		t.Fatalf("got %v, want ErrNoALSACard", err)
 	}
-	if got.ID != "vc4hdmi0" {
-		t.Errorf("got %q", got.ID)
+	// The message has to be actionable: it should name the way out.
+	if !strings.Contains(err.Error(), "audio.alarm_device") {
+		t.Errorf("error should say how to fix it: %v", err)
+	}
+	if !strings.Contains(err.Error(), "vc4hdmi0") {
+		t.Errorf("error should list what is available: %v", err)
+	}
+}
+
+func TestSelectALSACardStillHonoursAnExplicitHDMIChoice(t *testing.T) {
+	// Refusing to guess must not mean refusing to obey.
+	cards := ParseALSACards(sampleCards)[:2]
+	got, err := SelectALSACard(cards, "vc4hdmi0")
+	if err != nil || got.ID != "vc4hdmi0" {
+		t.Fatalf("got %+v, %v", got, err)
 	}
 }
 

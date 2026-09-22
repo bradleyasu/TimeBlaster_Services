@@ -50,6 +50,8 @@ KEEP_CONSOLE=0
 # The VT the television shows, and the one the rescue login moves to.
 CONSOLE_VT=1
 RESCUE_VT=2
+# Kernel messages are sent here: a VT the television never shows.
+KERNEL_VT=3
 
 SKIP_ERSATZTV=0
 SKIP_PACKAGES=0
@@ -566,7 +568,6 @@ configure_console() {
     # console=tty3 moves kernel output to a VT the television never shows, so
     # anything that does slip past `quiet` lands out of sight.
     local -a opts=(
-      "console=tty3"
       "quiet"
       "loglevel=3"
       "logo.nologo"
@@ -576,8 +577,27 @@ configure_console() {
     )
 
     local added=0
+
+    # console= is special: the image ships with console=tty1, which is the VT the
+    # television shows. It has to be rewritten rather than skipped as
+    # "already present", and the serial console alongside it must be left alone.
+    if grep -qE '(^| )console=tty1( |$)' "$cmdline"; then
+      if (( DRY_RUN )); then
+        info "[dry-run] would rewrite console=tty1 to console=tty${KERNEL_VT} in ${cmdline}"
+      else
+        sed -i "s/\(^\| \)console=tty1\( \|\$\)/\1console=tty${KERNEL_VT}\2/" "$cmdline"
+      fi
+      added=$((added + 1))
+    elif ! grep -qE '(^| )console=tty[0-9]' "$cmdline"; then
+      if (( DRY_RUN )); then
+        info "[dry-run] would append console=tty${KERNEL_VT} to ${cmdline}"
+      else
+        sed -i "1s|\$| console=tty${KERNEL_VT}|" "$cmdline"
+      fi
+      added=$((added + 1))
+    fi
+
     for opt in "${opts[@]}"; do
-      # Match on the key so console=tty1 is replaced rather than duplicated.
       local key="${opt%%=*}"
       if [[ "$opt" == *=* ]] && grep -qE "(^| )${key}=" "$cmdline"; then
         continue
@@ -757,12 +777,46 @@ install_ersatztv() {
   run install -d -m 0755 "$ERSATZTV_DIR"
   run install -d -m 0750 -o "$ERSATZTV_USER" -g "$ERSATZTV_USER" "$ERSATZTV_STATE"
   run install -d -m 0750 -o "$ERSATZTV_USER" -g "$ERSATZTV_USER" "${ERSATZTV_STATE}/transcode"
-  run tar -xzf "${tmp}/ersatztv.tar.gz" -C "$ERSATZTV_DIR"
+
+  # The release tarball wraps everything in a versioned directory
+  # (ErsatzTV-Legacy-vX.Y.Z-linux-arm64/), so extracting it straight into
+  # /opt/ersatztv leaves the binary one level too deep and the unit fails with
+  # status 203/EXEC. Extract to a staging directory, find where the binary
+  # actually landed, and flatten from there -- which also copes if a future
+  # release drops the wrapper.
+  run tar -xzf "${tmp}/ersatztv.tar.gz" -C "$tmp"
+
+  if (( DRY_RUN )); then
+    info "[dry-run] would flatten the release into ${ERSATZTV_DIR}"
+  else
+    local payload=""
+    if [[ -f "${tmp}/ErsatzTV" ]]; then
+      payload="$tmp"
+    else
+      payload="$(find "$tmp" -mindepth 2 -maxdepth 3 -name ErsatzTV -type f -print -quit 2>/dev/null)"
+      payload="${payload%/ErsatzTV}"
+    fi
+
+    if [[ -z "$payload" || ! -f "${payload}/ErsatzTV" ]]; then
+      rm -rf "$tmp"
+      warn "the ErsatzTV archive did not contain an ErsatzTV binary; skipping."
+      warn "  Timeblaster works without it; the television shows the standby screen."
+      return
+    fi
+
+    # Replace the contents rather than the directory, so a previous install's
+    # stray files do not linger and shadow the new ones.
+    find "$ERSATZTV_DIR" -mindepth 1 -maxdepth 1 ! -name '.version' -exec rm -rf {} +
+    cp -a "${payload}/." "${ERSATZTV_DIR}/"
+  fi
   rm -rf "$tmp"
 
   run chown -R root:root "$ERSATZTV_DIR"
   run chmod -R a+rX "$ERSATZTV_DIR"
-  [[ -f "${ERSATZTV_DIR}/ErsatzTV" ]] && run chmod 0755 "${ERSATZTV_DIR}/ErsatzTV"
+  if [[ -f "${ERSATZTV_DIR}/ErsatzTV" ]]; then
+    run chmod 0755 "${ERSATZTV_DIR}/ErsatzTV"
+    [[ -f "${ERSATZTV_DIR}/ErsatzTV.Scanner" ]] && run chmod 0755 "${ERSATZTV_DIR}/ErsatzTV.Scanner"
+  fi
   (( DRY_RUN )) || printf '%s\n' "$tag" > "${ERSATZTV_DIR}/.version"
   ok "installed ErsatzTV ${tag} to ${ERSATZTV_DIR}"
 

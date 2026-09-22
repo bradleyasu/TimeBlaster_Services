@@ -10,6 +10,8 @@
 
 [Unit]
 Description=Timeblaster network helper
+# Belongs in [Unit]; systemd ignores it in [Service].
+StartLimitIntervalSec=0
 Documentation=file:/usr/share/doc/timeblaster/wifi-setup.md
 After=NetworkManager.service
 Requires=NetworkManager.service
@@ -17,11 +19,15 @@ Requires=NetworkManager.service
 [Service]
 Type=simple
 User=root
+# Root for NetworkManager and for binding port 80 on the setup network, but the
+# timeblaster group so that /run/timeblaster and the socket inside it are
+# reachable by the unprivileged daemon. Without this the two units race to
+# create the directory and whichever loses cannot use it.
+Group=timeblaster
 ExecStart=/usr/local/bin/timeblaster-wifi --config /etc/timeblaster/timeblaster.toml
 
 Restart=always
 RestartSec=5
-StartLimitIntervalSec=0
 
 KillSignal=SIGTERM
 TimeoutStopSec=60
@@ -29,7 +35,9 @@ TimeoutStopSec=60
 # The socket lives here and is group-owned by timeblaster, mode 0660, so the main
 # daemon can reach it and nothing else on the system can.
 RuntimeDirectory=timeblaster
-RuntimeDirectoryMode=0750
+# 0770 with the shared group, so both this unit and the unprivileged daemon can
+# write here regardless of which one creates the directory.
+RuntimeDirectoryMode=0770
 RuntimeDirectoryPreserve=yes
 
 StandardOutput=journal

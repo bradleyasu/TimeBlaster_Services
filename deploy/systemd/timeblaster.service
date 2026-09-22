@@ -7,6 +7,10 @@
 
 [Unit]
 Description=Timeblaster alarm clock and controller
+# The alarm clock is always restarted, with no start-limit burst that could
+# leave it stopped after a bad night. This belongs in [Unit]; systemd ignores
+# it in [Service].
+StartLimitIntervalSec=0
 Documentation=file:/usr/share/doc/timeblaster/architecture.md
 After=network.target sound.target time-sync.target timeblaster-splash.service
 # ErsatzTV is deliberately only a "Wants": the alarm clock must start, and keep
@@ -26,11 +30,9 @@ SupplementaryGroups=dialout audio video render
 ExecStart=/usr/local/bin/timeblasterd --config /etc/timeblaster/timeblaster.toml
 
 # The alarm clock is the highest-priority function on this device, so it is
-# always restarted, with a short delay and no start-limit burst that could leave
-# it stopped after a bad night.
+# always restarted, with a short delay.
 Restart=always
 RestartSec=3
-StartLimitIntervalSec=0
 
 # SIGTERM unwinds gracefully: the speaker is silenced, the Nano is told the alarm
 # ended, and the database is closed. 45 seconds is generous but bounded.
@@ -39,7 +41,10 @@ TimeoutStopSec=45
 
 # systemd creates and owns these, so the daemon never needs to mkdir as root.
 RuntimeDirectory=timeblaster
-RuntimeDirectoryMode=0750
+# Shared with timeblaster-wifi.service, which runs as root but with this same
+# group. 0770 means either unit can create it and both can still use it.
+RuntimeDirectoryMode=0770
+RuntimeDirectoryPreserve=yes
 StateDirectory=timeblaster
 StateDirectoryMode=0750
 

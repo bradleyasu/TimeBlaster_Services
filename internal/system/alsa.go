@@ -86,14 +86,20 @@ func ParseALSACards(contents string) []ALSACard {
 //
 // Selector forms, in priority order:
 //
-//	""                 -> the first card that looks like USB audio, else the first card
+//	""                 -> the first card that looks like USB audio, and nothing else
 //	"hw:CARD=Device"   -> exact card id after CARD=
 //	"1"                -> card index
 //	"Device"           -> exact card id, else case-insensitive substring of id or description
 //
-// Returning an explicit error rather than silently falling back to card 0 is
-// deliberate: an alarm playing out of the television instead of the bedside
-// speaker is a worse failure than a loud log line.
+// The empty selector deliberately does NOT fall back to "whatever card is
+// first". On a Raspberry Pi with nothing plugged in, the first card is HDMI, so
+// that fallback would silently route the alarm to the television and then
+// report itself healthy. An alarm you cannot hear because it is playing through
+// a switched-off TV is the worst failure this device has, and it is worse than
+// a loud error telling you to plug the speaker in.
+//
+// An explicit selector is always honoured, HDMI included: if you ask for the
+// television by name, you get it.
 func SelectALSACard(cards []ALSACard, selector string) (ALSACard, error) {
 	if len(cards) == 0 {
 		return ALSACard{}, fmt.Errorf("%w: no sound cards present", ErrNoALSACard)
@@ -106,7 +112,10 @@ func SelectALSACard(cards []ALSACard, selector string) (ALSACard, error) {
 				return c, nil
 			}
 		}
-		return cards[0], nil
+		return ALSACard{}, fmt.Errorf(
+			"%w: no USB audio card found for the alarm speaker (available: %s). "+
+				"Plug the speaker in, or set audio.alarm_device to choose a card explicitly",
+			ErrNoALSACard, describeCards(cards))
 	}
 
 	// Accept a full ALSA device string and use the CARD= component.
