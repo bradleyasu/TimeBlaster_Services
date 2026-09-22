@@ -18,12 +18,28 @@ import (
 // preferences and editing the config file does not silently override them.
 func (a *App) Settings() web.Settings {
 	return web.Settings{
-		Timezone:          storage.GetString(a.store, storage.KeyTimezone, a.cfg.General.Timezone),
-		Clock24h:          storage.GetBool(a.store, storage.KeyClock24h, a.cfg.General.Clock24h),
-		DisplayBrightness: storage.GetInt(a.store, storage.KeyDisplayBrightness, a.cfg.General.DisplayBrightness),
-		DefaultSoundID:    storage.GetString(a.store, storage.KeyDefaultSoundID, a.cfg.Audio.DefaultSoundID),
-		OverlayEnabled:    storage.GetBool(a.store, storage.KeyChannelOverlayOn, a.cfg.Overlay.Enabled),
+		Timezone:       storage.GetString(a.store, storage.KeyTimezone, a.cfg.General.Timezone),
+		Clock24h:       storage.GetBool(a.store, storage.KeyClock24h, a.cfg.General.Clock24h),
+		DisplayOn:      a.storedDisplayOn(),
+		DefaultSoundID: storage.GetString(a.store, storage.KeyDefaultSoundID, a.cfg.Audio.DefaultSoundID),
+		OverlayEnabled: storage.GetBool(a.store, storage.KeyChannelOverlayOn, a.cfg.Overlay.Enabled),
 	}
+}
+
+// storedDisplayOn reads whether the display should be lit.
+//
+// Devices installed before the display became a switch stored a 0-100
+// brightness level instead. That value is still honoured once, so upgrading
+// leaves the display in the state the user left it in rather than silently
+// reverting to the configured default.
+func (a *App) storedDisplayOn() bool {
+	if _, ok, _ := a.store.GetSetting(storage.KeyDisplayOn); ok {
+		return storage.GetBool(a.store, storage.KeyDisplayOn, a.cfg.General.DisplayOn)
+	}
+	if v, ok, _ := a.store.GetSetting(storage.KeyLegacyDisplayBrightness); ok {
+		return v != "0"
+	}
+	return a.cfg.General.DisplayOn
 }
 
 // UpdateSettings persists preferences and applies them to the running
@@ -61,15 +77,16 @@ func (a *App) UpdateSettings(ctx context.Context, s web.Settings) (web.Settings,
 		}
 	}
 
-	if s.DisplayBrightness != current.DisplayBrightness {
-		if err := storage.SetInt(a.store, storage.KeyDisplayBrightness, s.DisplayBrightness); err != nil {
+	if s.DisplayOn != current.DisplayOn {
+		if err := storage.SetBool(a.store, storage.KeyDisplayOn, s.DisplayOn); err != nil {
 			return web.Settings{}, err
 		}
 		if a.nano != nil {
-			if err := a.nano.SetBrightness(s.DisplayBrightness); err != nil {
-				a.log.Debug("could not set the display brightness", "error", err)
+			if err := a.nano.SetDisplayOn(s.DisplayOn); err != nil {
+				a.log.Debug("could not change the display state", "error", err)
 			}
 		}
+		a.log.Info("display switched", "on", s.DisplayOn)
 	}
 
 	if s.DefaultSoundID != current.DefaultSoundID {

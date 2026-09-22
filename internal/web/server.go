@@ -78,11 +78,11 @@ type InputService interface {
 
 // Settings is the user-adjustable preference set exposed by the API.
 type Settings struct {
-	Timezone          string `json:"timezone"`
-	Clock24h          bool   `json:"clock_24h"`
-	DisplayBrightness int    `json:"display_brightness"`
-	DefaultSoundID    string `json:"default_sound_id"`
-	OverlayEnabled    bool   `json:"channel_overlay_enabled"`
+	Timezone       string `json:"timezone"`
+	Clock24h       bool   `json:"clock_24h"`
+	DisplayOn      bool   `json:"display_on"`
+	DefaultSoundID string `json:"default_sound_id"`
+	OverlayEnabled bool   `json:"channel_overlay_enabled"`
 }
 
 // SettingsService reads and writes preferences. The application wires it to

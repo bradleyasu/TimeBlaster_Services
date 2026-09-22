@@ -141,13 +141,16 @@ app should not appear to have failed when the knob later wins.
 {
   "timezone": "America/New_York",
   "clock_24h": false,
-  "display_brightness": 75,
+  "display_on": true,
   "default_sound_id": "alarm1",
   "channel_overlay_enabled": true
 }
 ```
 
-`PUT` is partial. An unknown timezone or an out-of-range brightness is a `400`.
+`PUT` is partial. An unknown timezone is a `400`.
+
+`display_on` is a switch rather than a brightness level because the 7-segment
+display has no dimmer — see [hardware.md](hardware.md#display).
 
 ## Networking
 

@@ -155,10 +155,21 @@ bit  7    6    5    4    3    2    1    0
 ```
 
 **Brightness.** The registers' `~OE` is tied low on the board and is not brought
-out on J2, so there is **no hardware dimming**. The protocol's
-`DISPLAY|BRIGHTNESS` message is honoured as far as the hardware allows: 0 blanks
-the display, anything else turns it on. To get real dimming, wire `~OE` to a
-PWM-capable pin and set `DISPLAY_OE_PIN` in `firmware/timeblaster-nano/src/Pins.h`.
+out on J2, so there is **no hardware dimming**. The display is therefore exposed
+throughout as a switch: `general.display_on` in the configuration, a toggle in
+the companion app, and `SetDisplayOn` on the Pi. The wire format keeps a 0–100
+field so that better hardware would need no protocol change; the firmware blanks
+the display at 0 and lights it otherwise.
+
+To get real dimming, wire `~OE` to a PWM-capable pin, set `DISPLAY_OE_PIN` in
+`firmware/timeblaster-nano/src/Pins.h` (`Display.cpp` already drives it), and
+turn the app's toggle back into a slider.
+
+**While the Pi is booting.** The Nano is powered from the Pi's USB, so it comes
+up first. Until the Pi sends its first `TIME` message the display runs the
+driver's loading animation — a comet lapping the outside edge of all four digits
+— rather than sitting blank or frozen. It also resumes if the link is lost long
+enough for the Pi to re-announce itself.
 
 **The driver is vendored, not written here.** `src/SevenSegment.{h,cpp}` is
 copied byte for byte from the working TimeblasterClock project and must not be

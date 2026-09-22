@@ -75,8 +75,14 @@ type General struct {
 	Timezone string `toml:"timezone"`
 	// Clock24h selects 24-hour time on the 7-segment display and in the UI.
 	Clock24h bool `toml:"clock_24h"`
-	// DisplayBrightness is the 7-segment display brightness, 0-100.
-	DisplayBrightness int `toml:"display_brightness"`
+	// DisplayOn turns the 7-segment display on or off.
+	//
+	// It is a switch rather than a brightness level because the display has no
+	// dimmer: the 74HC595s' ~OE is tied low on the board, so the hardware can
+	// only be lit or dark. Exposing a 0-100 slider that did nothing except at
+	// zero would be a lie. If ~OE is ever wired to a PWM pin, this is where a
+	// level would come back.
+	DisplayOn bool `toml:"display_on"`
 	// RestoreChannelOnBoot re-selects the last channel at startup. It is off by
 	// default because the channel knob is an absolute position control: the knob's
 	// physical position is the truth, and the first reading from the Nano will
@@ -320,7 +326,7 @@ func Default() Config {
 			Hostname:             "timeblaster",
 			Timezone:             "",
 			Clock24h:             false,
-			DisplayBrightness:    75,
+			DisplayOn:            true,
 			RestoreChannelOnBoot: false,
 		},
 		Logging: Logging{
@@ -491,9 +497,6 @@ func (c Config) Validate() error {
 	// general
 	if c.General.Hostname == "" {
 		add("general.hostname must not be empty")
-	}
-	if c.General.DisplayBrightness < 0 || c.General.DisplayBrightness > 100 {
-		add("general.display_brightness must be 0-100, got %d", c.General.DisplayBrightness)
 	}
 	if c.General.Timezone != "" {
 		if _, err := time.LoadLocation(c.General.Timezone); err != nil {

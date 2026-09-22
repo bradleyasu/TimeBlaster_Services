@@ -482,10 +482,6 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if in.DisplayBrightness < 0 || in.DisplayBrightness > 100 {
-		writeError(w, http.StatusBadRequest, "display_brightness must be 0-100")
-		return
-	}
 	if in.Timezone != "" {
 		if _, err := time.LoadLocation(in.Timezone); err != nil {
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("%q is not a known timezone", in.Timezone))
@@ -503,7 +499,7 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	s.log.Info("settings updated via the companion app",
 		"timezone", saved.Timezone, "clock_24h", saved.Clock24h,
-		"brightness", saved.DisplayBrightness, "default_sound", saved.DefaultSoundID)
+		"display_on", saved.DisplayOn, "default_sound", saved.DefaultSoundID)
 	writeJSON(w, http.StatusOK, saved)
 }
 

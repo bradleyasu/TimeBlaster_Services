@@ -34,8 +34,8 @@ type Nano interface {
 	ShowText(text string) error
 	// ShowClock returns the display to normal.
 	ShowClock() error
-	// SetBrightness sets display brightness, 0-100.
-	SetBrightness(pct int) error
+	// SetDisplayOn lights or blanks the 7-segment display.
+	SetDisplayOn(on bool) error
 	// SetLED sets a named LED.
 	SetLED(name string, on bool) error
 	// Connected reports whether the Nano is currently reachable.
@@ -73,8 +73,8 @@ type Config struct {
 	ReconnectMax time.Duration
 	// WriteQueueSize bounds buffered outbound messages.
 	WriteQueueSize int
-	// Brightness is applied to the display on every (re)connection.
-	Brightness int
+	// DisplayOn is applied to the display on every (re)connection.
+	DisplayOn bool
 }
 
 // DefaultConfig returns sensible link tuning.
@@ -85,7 +85,7 @@ func DefaultConfig() Config {
 		ReconnectMin:     500 * time.Millisecond,
 		ReconnectMax:     15 * time.Second,
 		WriteQueueSize:   64,
-		Brightness:       75,
+		DisplayOn:        true,
 	}
 }
 
@@ -515,14 +515,14 @@ var (
 // It runs on every connection and on every HELLO, which is what makes the
 // unplug/replug path work without anyone having to think about it: the Nano
 // comes back knowing nothing, and a moment later it knows the time, the alarm
-// state, the brightness and what to display.
+// state, whether the display is lit, and what to display.
 func (l *Link) Resync() {
 	l.mu.RLock()
-	alarmActive, text, brightness := l.alarmActive, l.displayText, l.cfg.Brightness
+	alarmActive, text, displayOn := l.alarmActive, l.displayText, l.cfg.DisplayOn
 	l.mu.RUnlock()
 
 	_ = l.SetTime(l.clock.Now())
-	_ = l.SetBrightness(brightness)
+	_ = l.SetDisplayOn(displayOn)
 	_ = l.SetAlarmActive(alarmActive)
 	_ = l.SetLED(protocol.LEDAlarm, alarmActive)
 	if text != "" {
@@ -530,7 +530,8 @@ func (l *Link) Resync() {
 	} else {
 		_ = l.ShowClock()
 	}
-	l.log.Debug("resynchronised Nano state", "alarm_active", alarmActive, "display_text", text)
+	l.log.Debug("resynchronised Nano state",
+		"alarm_active", alarmActive, "display_on", displayOn, "display_text", text)
 }
 
 // SetTime synchronises the Nano's clock.
@@ -564,12 +565,21 @@ func (l *Link) ShowClock() error {
 	return l.enqueue(protocol.DisplayClock(l.seq.Next()), true)
 }
 
-// SetBrightness sets display brightness, 0-100.
-func (l *Link) SetBrightness(pct int) error {
+// SetDisplayOn lights or blanks the 7-segment display.
+//
+// The wire format keeps a 0-100 brightness field so that a board with ~OE wired
+// would need no protocol change, but this hardware can only honour the two
+// ends of it: the firmware blanks the display at 0 and lights it otherwise.
+func (l *Link) SetDisplayOn(on bool) error {
 	l.mu.Lock()
-	l.cfg.Brightness = pct
+	l.cfg.DisplayOn = on
 	l.mu.Unlock()
-	return l.enqueue(protocol.DisplayBrightness(l.seq.Next(), pct), false)
+
+	level := 0
+	if on {
+		level = 100
+	}
+	return l.enqueue(protocol.DisplayBrightness(l.seq.Next(), level), false)
 }
 
 // SetLED sets a named LED.

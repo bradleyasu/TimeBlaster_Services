@@ -70,10 +70,12 @@
       <span>24-hour clock</span>
       <input type="checkbox" id="set-clock24">
     </label>
-    <label class="field">
-      <span>Display brightness <b id="brightness-value">75</b>%</span>
-      <input type="range" id="set-brightness" min="0" max="100" step="5">
+    <label class="field toggle">
+      <span>7-segment display</span>
+      <input type="checkbox" id="set-display-on">
     </label>
+    <p class="hint">The display has no dimmer, so this is a switch rather than a
+      brightness level.</p>
     <label class="field">
       <span>Default alarm sound</span>
       <select id="set-sound"></select>

@@ -312,7 +312,7 @@ func (a *App) initHardware(deps Deps) {
 		ReconnectMin:     a.cfg.Serial.ReconnectMinBackoff.Duration,
 		ReconnectMax:     a.cfg.Serial.ReconnectMaxBackoff.Duration,
 		WriteQueueSize:   a.cfg.Serial.WriteQueueSize,
-		Brightness:       storage.GetInt(a.store, storage.KeyDisplayBrightness, a.cfg.General.DisplayBrightness),
+		DisplayOn:        a.storedDisplayOn(),
 	}
 	a.link = hardware.NewLink(linkCfg, hardware.Deps{
 		Opener: opener, Clock: a.clock, Logger: a.log.With("component", "nano"),

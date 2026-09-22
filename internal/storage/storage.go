@@ -28,13 +28,17 @@ import (
 
 // Settings keys. They are collected here so no caller invents a stray key.
 const (
-	KeyTimezone          = "timezone"
-	KeyClock24h          = "clock_24h"
-	KeyDisplayBrightness = "display_brightness"
-	KeyDefaultSoundID    = "default_sound_id"
-	KeyLastChannelNumber = "last_channel_number"
-	KeyRestoreChannel    = "restore_channel_on_boot"
-	KeyChannelOverlayOn  = "channel_overlay_enabled"
+	KeyTimezone  = "timezone"
+	KeyClock24h  = "clock_24h"
+	KeyDisplayOn = "display_on"
+	// KeyLegacyDisplayBrightness is the pre-on/off key. It is still read once,
+	// so a device that stored a brightness level keeps its display in the state
+	// the user left it in rather than silently reverting to the default.
+	KeyLegacyDisplayBrightness = "display_brightness"
+	KeyDefaultSoundID          = "default_sound_id"
+	KeyLastChannelNumber       = "last_channel_number"
+	KeyRestoreChannel          = "restore_channel_on_boot"
+	KeyChannelOverlayOn        = "channel_overlay_enabled"
 	// KeyLastKnownVolume records the last volume the knob reported. It is a
 	// diagnostic only and is deliberately never replayed at startup: the physical
 	// potentiometer is the authority on volume.

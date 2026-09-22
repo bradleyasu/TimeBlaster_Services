@@ -341,7 +341,7 @@ func newFixture(t *testing.T, seed ...alarm.Alarm) *fixture {
 			{ID: 2, Number: "2", Name: "Cartoons"},
 		}},
 		wifi:     wifi.NewFakeManager(),
-		settings: &fakeSettings{settings: Settings{Timezone: "UTC", DisplayBrightness: 75, DefaultSoundID: "alarm1"}},
+		settings: &fakeSettings{settings: Settings{Timezone: "UTC", DisplayOn: true, DefaultSoundID: "alarm1"}},
 	}
 
 	srv, err := NewServer(cfg.Web, Deps{
@@ -668,7 +668,7 @@ func TestSettingsEndpoints(t *testing.T) {
 	rec := f.do(t, http.MethodGet, "/api/settings", "")
 	var s Settings
 	decode(t, rec, &s)
-	if s.DisplayBrightness != 75 {
+	if !s.DisplayOn {
 		t.Fatalf("settings: %+v", s)
 	}
 
@@ -678,11 +678,11 @@ func TestSettingsEndpoints(t *testing.T) {
 		t.Fatalf("update: %d %s", rec.Code, rec.Body)
 	}
 	decode(t, rec, &s)
-	if !s.Clock24h || s.DisplayBrightness != 75 || s.DefaultSoundID != "alarm1" {
+	if !s.Clock24h || !s.DisplayOn || s.DefaultSoundID != "alarm1" {
 		t.Errorf("partial update clobbered fields: %+v", s)
 	}
 
-	for _, bad := range []string{`{"display_brightness":250}`, `{"timezone":"Mars/Olympus"}`} {
+	for _, bad := range []string{`{"timezone":"Mars/Olympus"}`, `{"display_on":"yes"}`} {
 		if rec := f.do(t, http.MethodPut, "/api/settings", bad); rec.Code != http.StatusBadRequest {
 			t.Errorf("%s: %d", bad, rec.Code)
 		}

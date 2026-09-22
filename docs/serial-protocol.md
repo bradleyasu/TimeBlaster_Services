@@ -84,7 +84,7 @@ TB1|16|BUTTON|ALARM_OFF|DOWN
 | `ALARM` | `ACTIVE`, `0`\|`1` | Whether an alarm is ringing. |
 | `DISPLAY` | `TEXT`, text | Show literal text instead of the clock. |
 | `DISPLAY` | `CLOCK` | Return to the clock. |
-| `DISPLAY` | `BRIGHTNESS`, 0–100 | Display brightness. On the current board there is no hardware dimming: 0 blanks the display, anything else turns it on. See [hardware.md](hardware.md#display). |
+| `DISPLAY` | `BRIGHTNESS`, 0–100 | Whether the display is lit. The field keeps a range so better hardware would need no protocol change, but the current board has no dimmer: the firmware blanks at 0 and lights otherwise, and the Pi only ever sends 0 or 100. See [hardware.md](hardware.md#display). |
 | `LED` | name, `0`\|`1` | Set a named LED: `ALARM`, `WIFI`, `POWER`. |
 | `CONFIG` | key, value | A firmware tunable. Currently only `pot_threshold`. |
 
@@ -145,7 +145,7 @@ Nano ──PING every 2 s──► Pi ──PONG──► Nano
 * The Nano re-sends `HELLO` if the Pi goes quiet for 10 s, so a restarted daemon
   picks it up promptly instead of waiting for the next reconnect cycle.
 * On every connection and every `HELLO`, the Pi performs a **full resync**: time,
-  brightness, alarm state, LEDs and display contents. The Nano therefore never
+  display on/off, alarm state, LEDs and display contents. The Nano therefore never
   needs to persist anything.
 * On disconnect the Pi **resets all derived input state** — filters unprimed,
   hysteresis cleared, button holds forgotten — because knobs may have been turned

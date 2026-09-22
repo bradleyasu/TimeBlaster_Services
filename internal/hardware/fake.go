@@ -53,9 +53,9 @@ func (f *FakeNano) ShowText(text string) error {
 // ShowClock records a return to the clock display.
 func (f *FakeNano) ShowClock() error { return f.record(Command{Kind: "display-clock"}) }
 
-// SetBrightness records a brightness change.
-func (f *FakeNano) SetBrightness(pct int) error {
-	return f.record(Command{Kind: "brightness", Value: pct})
+// SetDisplayOn records the display being lit or blanked.
+func (f *FakeNano) SetDisplayOn(on bool) error {
+	return f.record(Command{Kind: "display-on", Flag: on})
 }
 
 // SetLED records an LED change.

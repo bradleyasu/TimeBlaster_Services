@@ -320,6 +320,21 @@ static void testLoadingUntilSynced() {
 
   displaySetSynced(false);
   check(isLoading(), "losing sync resumes the animation");
+
+  // Turning the display off and back on before the Pi has ever sent a time must
+  // bring the animation back, not leave the display showing stale content. The
+  // off path stops the animation, so the waiting path has to restart it.
+  setupChainCapture();
+  displayInit();
+  displaySetBrightness(0);
+  displayTick();
+  check(!isLoading(), "turning the display off stops the animation");
+
+  displaySetBrightness(100);
+  displayTick();
+  check(isLoading(), "turning it back on while still unsynced resumes the animation");
+  check(hosttest::lastFrame != std::vector<uint8_t>({0xFF, 0xFF, 0xFF, 0xFF}),
+        "and the display is not left blank");
 }
 
 // --- Protocol ---------------------------------------------------------------

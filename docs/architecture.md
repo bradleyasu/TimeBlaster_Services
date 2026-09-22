@@ -156,7 +156,7 @@ input.ButtonHold{WIFI, 5s} → wifi.EnterSetupMode() → hardware.ShowText("SETU
 input.ButtonPress{ALARM_OFF} → if alarm active: alarm.DismissActive()
 alarm.Fired → audio.PlayAlarm() + hardware.SetAlarmActive(true)
 alarm.Ended → audio.StopAlarm() + hardware.SetAlarmActive(false)
-serial.Connected → hardware.Resync (time, alarm state, brightness, LEDs)
+serial.Connected → hardware.Resync (time, alarm state, display on/off, LEDs)
 ```
 
 ---
@@ -190,7 +190,7 @@ type Nano interface {
     SetAlarmActive(active bool) error
     ShowText(text string, hold time.Duration) error
     ClearText() error
-    SetBrightness(pct int) error
+    SetDisplayOn(on bool) error
     SetLED(name string, on bool) error
     Connected() bool
 }
@@ -305,7 +305,7 @@ CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER 
 ```
 
 Settings keys (all strings, typed accessors in `storage`):
-`timezone`, `clock_24h`, `display_brightness`, `default_sound_id`, `last_channel_number`,
+`timezone`, `clock_24h`, `display_on`, `default_sound_id`, `last_channel_number`,
 `restore_channel_on_boot`, `alarm_volume_last_seen` (diagnostic only — never replayed).
 
 **Transient state** (`internal/state`) is in-memory only and never persisted: raw and

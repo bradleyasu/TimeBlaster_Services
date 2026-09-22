@@ -56,7 +56,7 @@ Two layers, deliberately:
 
 So reinstalling does not discard preferences, and editing the file does not
 silently override a choice the user made in the app. The overlap is small:
-timezone, 12/24-hour, display brightness, default sound, overlay on/off.
+timezone, 12/24-hour, display on/off, default sound, overlay on/off.
 
 ## Sections
 
@@ -67,7 +67,7 @@ timezone, 12/24-hour, display brightness, default sound, overlay on/off.
 | `hostname` | `"timeblaster"` | The mDNS name. Changing it needs a reboot. |
 | `timezone` | `""` | IANA name. Empty means the system timezone, resolved to its real name for display. The app's setting overrides this. |
 | `clock_24h` | `false` | |
-| `display_brightness` | `75` | 0–100. |
+| `display_on` | `true` | Whether the 7-segment display is lit. A switch, not a level: the display has no dimmer. See [hardware.md](hardware.md#display). |
 | `restore_channel_on_boot` | `false` | Off because the channel knob is absolute: its physical position selects the right channel within a second anyway. |
 
 ### `[logging]`

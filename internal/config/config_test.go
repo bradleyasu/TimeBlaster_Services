@@ -45,7 +45,7 @@ func TestLoadLayersOverDefaults(t *testing.T) {
 	path := writeConfig(t, `
 [general]
 hostname = "bedroom-blaster"
-display_brightness = 30
+display_on = false
 
 [serial]
 time_sync_interval = "2m"
@@ -63,7 +63,7 @@ channel_overlay_duration = "4s"
 		t.Fatalf("Load: %v", err)
 	}
 
-	if cfg.General.Hostname != "bedroom-blaster" || cfg.General.DisplayBrightness != 30 {
+	if cfg.General.Hostname != "bedroom-blaster" || cfg.General.DisplayOn {
 		t.Errorf("general: %+v", cfg.General)
 	}
 	if cfg.Serial.TimeSyncInterval.Duration != 2*time.Minute {
@@ -115,12 +115,12 @@ func TestLoadRejectsBadDuration(t *testing.T) {
 }
 
 func TestLoadRejectsInvalidValues(t *testing.T) {
-	path := writeConfig(t, "[general]\ndisplay_brightness = 250\n")
+	path := writeConfig(t, "[general]\nhostname = \"\"\n")
 	_, err := Load(path)
 	if err == nil {
 		t.Fatal("expected a validation error")
 	}
-	if !strings.Contains(err.Error(), "display_brightness") {
+	if !strings.Contains(err.Error(), "hostname") {
 		t.Errorf("error should name the field: %v", err)
 	}
 }
@@ -152,6 +152,7 @@ func TestValidateFieldRanges(t *testing.T) {
 		field string
 	}{
 		{"bad timezone", func(c *Config) { c.General.Timezone = "Mars/Olympus" }, "timezone"},
+		{"empty hostname", func(c *Config) { c.General.Hostname = "" }, "hostname"},
 		{"empty database path", func(c *Config) { c.Storage.DatabasePath = "" }, "database_path"},
 		{"no serial device", func(c *Config) { c.Serial.Device = ""; c.Serial.DeviceGlobs = nil }, "serial"},
 		{"backoff inverted", func(c *Config) { c.Serial.ReconnectMaxBackoff = Dur(time.Millisecond) }, "reconnect_max_backoff"},

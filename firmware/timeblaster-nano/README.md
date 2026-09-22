@@ -65,12 +65,21 @@ bit  7    6    5    4    3    2    1    0
 
 ### Brightness
 
-There is no hardware dimming, so the protocol's `DISPLAY|BRIGHTNESS` message is
-honoured as much as this board allows: **0 blanks the display, anything else
-turns it on.** That is stated plainly rather than silently ignored.
+There is no hardware dimming, so the display is a **switch** everywhere: the
+Pi's `general.display_on` setting, a toggle in the companion app, and
+`SetDisplayOn` on the link. The wire format keeps a 0-100 field so better
+hardware would need no protocol change; the firmware blanks the display at 0 and
+lights it otherwise, and the Pi only ever sends 0 or 100.
 
 To get real dimming, wire the 595s' `~OE` to a PWM-capable pin and set
 `DISPLAY_OE_PIN` in `Pins.h`; `Display.cpp` already drives it if it is set.
+
+### While the Pi is booting
+
+The Nano is powered from the Pi's USB, so it comes up first. Until the Pi's
+first `TIME` message arrives the display runs the driver's loading animation
+rather than sitting blank or frozen, and it resumes if the link is lost long
+enough. Switching the display off wins over the animation: off means off.
 
 ## Building and flashing
 

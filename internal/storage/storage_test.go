@@ -218,21 +218,21 @@ func TestTypedSettingHelpers(t *testing.T) {
 		t.Error("stored bool not read back")
 	}
 
-	if got := GetInt(db, KeyDisplayBrightness, 75); got != 75 {
+	if got := GetInt(db, KeyLegacyDisplayBrightness, 75); got != 75 {
 		t.Errorf("missing int: %d", got)
 	}
-	if err := SetInt(db, KeyDisplayBrightness, 30); err != nil {
+	if err := SetInt(db, KeyLegacyDisplayBrightness, 30); err != nil {
 		t.Fatal(err)
 	}
-	if got := GetInt(db, KeyDisplayBrightness, 75); got != 30 {
+	if got := GetInt(db, KeyLegacyDisplayBrightness, 75); got != 30 {
 		t.Errorf("stored int: %d", got)
 	}
 
 	// A corrupt value falls back to the default rather than failing a boot.
-	if err := db.SetSetting(KeyDisplayBrightness, "bright-ish"); err != nil {
+	if err := db.SetSetting(KeyLegacyDisplayBrightness, "bright-ish"); err != nil {
 		t.Fatal(err)
 	}
-	if got := GetInt(db, KeyDisplayBrightness, 75); got != 75 {
+	if got := GetInt(db, KeyLegacyDisplayBrightness, 75); got != 75 {
 		t.Errorf("malformed int should fall back: %d", got)
 	}
 	if err := db.SetSetting(KeyClock24h, "yes-please"); err != nil {

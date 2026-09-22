@@ -451,11 +451,11 @@ func TestSettingsPersistAndApply(t *testing.T) {
 	h := newHarness(t, nil)
 	ctx := context.Background()
 
-	saved, err := h.app.UpdateSettings(ctx, webSettings("America/New_York", true, 30, "alarm2", false))
+	saved, err := h.app.UpdateSettings(ctx, webSettings("America/New_York", true, false, "alarm2", false))
 	if err != nil {
 		t.Fatalf("UpdateSettings: %v", err)
 	}
-	if saved.Timezone != "America/New_York" || !saved.Clock24h || saved.DisplayBrightness != 30 {
+	if saved.Timezone != "America/New_York" || !saved.Clock24h || saved.DisplayOn {
 		t.Fatalf("saved: %+v", saved)
 	}
 
@@ -463,9 +463,9 @@ func TestSettingsPersistAndApply(t *testing.T) {
 	if h.app.scheduler.Location().String() != "America/New_York" {
 		t.Errorf("scheduler timezone: %s", h.app.scheduler.Location())
 	}
-	// The Nano was told about the brightness and resynced for the new timezone.
-	if c, ok := h.nano.LastOfKind("brightness"); !ok || c.Value != 30 {
-		t.Errorf("brightness: %+v", c)
+	// The Nano was told to blank the display and resynced for the new timezone.
+	if c, ok := h.nano.LastOfKind("display-on"); !ok || c.Flag {
+		t.Errorf("display-on: %+v", c)
 	}
 	if len(h.nano.CommandsOfKind("time")) == 0 {
 		t.Error("the Nano was not resynced after the timezone change")
@@ -484,10 +484,10 @@ func TestSettingsRejectInvalidValues(t *testing.T) {
 	h := newHarness(t, nil)
 	ctx := context.Background()
 
-	if _, err := h.app.UpdateSettings(ctx, webSettings("Mars/Olympus", false, 50, "", true)); err == nil {
+	if _, err := h.app.UpdateSettings(ctx, webSettings("Mars/Olympus", false, true, "", true)); err == nil {
 		t.Error("an unknown timezone should be rejected")
 	}
-	if _, err := h.app.UpdateSettings(ctx, webSettings("UTC", false, 50, "does-not-exist", true)); err == nil {
+	if _, err := h.app.UpdateSettings(ctx, webSettings("UTC", false, true, "does-not-exist", true)); err == nil {
 		t.Error("a missing sound should be rejected")
 	}
 }
@@ -669,10 +669,10 @@ func TestSupervisorNonCriticalFailureIsTolerated(t *testing.T) {
 }
 
 // webSettings is a small constructor so the tests read clearly.
-func webSettings(tz string, clock24 bool, brightness int, sound string, overlay bool) web.Settings {
+func webSettings(tz string, clock24 bool, displayOn bool, sound string, overlay bool) web.Settings {
 	return web.Settings{
 		Timezone: tz, Clock24h: clock24,
-		DisplayBrightness: brightness, DefaultSoundID: sound, OverlayEnabled: overlay,
+		DisplayOn: displayOn, DefaultSoundID: sound, OverlayEnabled: overlay,
 	}
 }
 
@@ -752,5 +752,43 @@ func TestSystemTimezoneNameFromEnvironment(t *testing.T) {
 		if _, err := time.LoadLocation(name); err != nil {
 			t.Errorf("SystemTimezoneName returned an unloadable zone %q: %v", name, err)
 		}
+	}
+}
+
+func TestDisplayStateSurvivesTheUpgradeFromBrightness(t *testing.T) {
+	// Devices installed before the display became a switch stored a 0-100
+	// brightness level. That value is honoured once, so upgrading leaves the
+	// display as the user left it rather than silently reverting to the default.
+	for _, tc := range []struct {
+		name   string
+		stored string
+		want   bool
+	}{
+		{"a level of 0 means the user had it off", "0", false},
+		{"any other level means it was on", "75", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t, nil)
+			// Clear the new key so only the legacy one is present.
+			if err := h.store.SetSetting(storage.KeyLegacyDisplayBrightness, tc.stored); err != nil {
+				t.Fatal(err)
+			}
+			if got := h.app.Settings().DisplayOn; got != tc.want {
+				t.Errorf("DisplayOn: got %v want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestDisplayOnPrefersTheNewKeyOverTheLegacyOne(t *testing.T) {
+	h := newHarness(t, nil)
+	if err := h.store.SetSetting(storage.KeyLegacyDisplayBrightness, "0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.SetBool(h.store, storage.KeyDisplayOn, true); err != nil {
+		t.Fatal(err)
+	}
+	if !h.app.Settings().DisplayOn {
+		t.Error("the current key should win over the legacy one")
 	}
 }

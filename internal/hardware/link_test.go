@@ -202,7 +202,7 @@ func waitUntil(t *testing.T, what string, cond func() bool) {
 
 func TestLinkConnectsAndResyncs(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.Brightness = 42
+	cfg.DisplayOn = true
 	f, nanos := newLinkFixture(t, cfg, 1)
 	nano := newNanoSide(t, nanos[0])
 
@@ -473,7 +473,7 @@ func TestLinkDropsWritesWhenTheQueueIsFull(t *testing.T) {
 
 	// Fill the queue.
 	for range cfg.WriteQueueSize {
-		if err := link.SetBrightness(50); err != nil {
+		if err := link.SetDisplayOn(true); err != nil {
 			t.Fatalf("filling the queue: %v", err)
 		}
 	}
@@ -515,7 +515,7 @@ func TestFakeNano(t *testing.T) {
 	if err := f.SetLED(protocol.LEDAlarm, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.SetBrightness(30); err != nil {
+	if err := f.SetDisplayOn(false); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.ShowClock(); err != nil {
@@ -527,6 +527,9 @@ func TestFakeNano(t *testing.T) {
 
 	if got, ok := f.LastOfKind("display-text"); !ok || got.Text != "SETUP" {
 		t.Errorf("display-text: %+v", got)
+	}
+	if got, ok := f.LastOfKind("display-on"); !ok || got.Flag {
+		t.Errorf("display-on: %+v", got)
 	}
 	if len(f.Commands()) != 6 {
 		t.Errorf("commands: %d", len(f.Commands()))
@@ -544,4 +547,66 @@ func TestFakeNano(t *testing.T) {
 	if err := f.ShowClock(); err == nil {
 		t.Error("configured error not returned")
 	}
+}
+
+func TestSetDisplayOnMapsToTheBrightnessMessage(t *testing.T) {
+	// The wire format keeps a 0-100 brightness field so that a board with ~OE
+	// wired would need no protocol change. This hardware can only honour the two
+	// ends of it, so the Pi sends exactly those.
+	f, nanos := newLinkFixture(t, DefaultConfig(), 1)
+	nano := newNanoSide(t, nanos[0])
+	waitUntil(t, "connection", f.link.Connected)
+
+	// nextBrightness reads until the next DISPLAY|BRIGHTNESS lands, skipping the
+	// other display commands the resync sends alongside it.
+	nextBrightness := func() string {
+		t.Helper()
+		for {
+			m := nano.expect(protocol.TypeDisplay, 3*time.Second)
+			if m.Arg(0) == protocol.DisplaySubBrightness {
+				return m.Arg(1)
+			}
+		}
+	}
+
+	// The connection resync sends one first; the default is on.
+	if got := nextBrightness(); got != "100" {
+		t.Errorf("resync brightness: got %q want 100", got)
+	}
+
+	if err := f.link.SetDisplayOn(false); err != nil {
+		t.Fatalf("SetDisplayOn(false): %v", err)
+	}
+	if got := nextBrightness(); got != "0" {
+		t.Errorf("display off should send brightness 0, got %q", got)
+	}
+
+	if err := f.link.SetDisplayOn(true); err != nil {
+		t.Fatalf("SetDisplayOn(true): %v", err)
+	}
+	if got := nextBrightness(); got != "100" {
+		t.Errorf("display on should send brightness 100, got %q", got)
+	}
+}
+
+func TestResyncReassertsTheDisplayState(t *testing.T) {
+	// A Nano that reset has forgotten that the display was switched off, so the
+	// resync has to say so again or the display silently comes back on.
+	cfg := DefaultConfig()
+	cfg.DisplayOn = false
+	f, nanos := newLinkFixture(t, cfg, 1)
+	nano := newNanoSide(t, nanos[0])
+	waitUntil(t, "connection", f.link.Connected)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		m := nano.expect(protocol.TypeDisplay, 3*time.Second)
+		if m.Arg(0) == protocol.DisplaySubBrightness {
+			if m.Arg(1) != "0" {
+				t.Errorf("resync should re-assert the display is off, got %q", m.Arg(1))
+			}
+			return
+		}
+	}
+	t.Fatal("the resync never sent a display brightness")
 }

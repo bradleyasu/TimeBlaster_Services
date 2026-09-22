@@ -402,8 +402,7 @@
     return api('GET', 'api/settings').then(function (s) {
       $('set-timezone').value = s.timezone || '';
       $('set-clock24').checked = !!s.clock_24h;
-      $('set-brightness').value = s.display_brightness;
-      $('brightness-value').textContent = s.display_brightness;
+      $('set-display-on').checked = !!s.display_on;
       $('set-overlay').checked = !!s.channel_overlay_enabled;
       fillSoundSelect($('set-sound'), s.default_sound_id);
     }).catch(fail);
@@ -413,7 +412,7 @@
     api('PUT', 'api/settings', {
       timezone: $('set-timezone').value.trim(),
       clock_24h: $('set-clock24').checked,
-      display_brightness: parseInt($('set-brightness').value, 10),
+      display_on: $('set-display-on').checked,
       default_sound_id: $('set-sound').value,
       channel_overlay_enabled: $('set-overlay').checked
     }).then(function () {
@@ -536,9 +535,6 @@
       api('POST', 'api/channels/clear').then(refresh).catch(fail);
     });
 
-    $('set-brightness').addEventListener('input', function () {
-      $('brightness-value').textContent = this.value;
-    });
     $('btn-save-settings').addEventListener('click', saveSettings);
     $('btn-stop-preview').addEventListener('click', function () {
       api('POST', 'api/sounds/preview/stop').catch(fail);

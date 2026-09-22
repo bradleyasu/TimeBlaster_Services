@@ -151,6 +151,8 @@ static void buildClockText(char* out, size_t n, bool colonOn) {
 void displayTick() {
   unsigned long now = millis();
 
+  // The display being off wins over everything else, including the alarm flash
+  // and the waiting animation. Off means off.
   if (brightnessPct == 0) {
     setLoading(false);
     push("    ");
@@ -159,7 +161,15 @@ void displayTick() {
   }
 
   if (!timeSynced) {
-    // The loading animation owns the display; paintDisplay() advances it.
+    // Waiting for the Raspberry Pi's first time sync: the Nano is powered from
+    // the Pi's USB, so this covers the whole of the Pi's boot. The animation is
+    // a far better "still coming up" indicator than a frozen or blank display.
+    //
+    // setLoading is idempotent, so asserting it here every tick costs nothing
+    // and covers the case where the display was switched off and back on before
+    // the first sync arrived — the off path stops the animation, and without
+    // this the display would come back showing stale content.
+    setLoading(true);
     paintDisplay();
     return;
   }
