@@ -942,6 +942,76 @@ install_ffmpeg() {
   got="$("${FFMPEG_DIR}/bin/ffmpeg" -version 2>/dev/null | head -1 | awk '{print $3}')"
   ok "installed FFmpeg ${got:-$tag} to ${FFMPEG_DIR}/bin"
   note "ErsatzTV uses ${FFMPEG_DIR}/bin; the system FFmpeg is untouched."
+
+  point_ersatztv_at_ffmpeg
+}
+
+# point_ersatztv_at_ffmpeg updates the paths ErsatzTV has already recorded.
+#
+# ErsatzTV resolves ffmpeg and ffprobe from PATH once, on its very first run,
+# and stores the result in its own settings. Putting our build first on PATH
+# therefore only helps a fresh install; one that has already started keeps
+# pointing at /usr/bin and keeps reporting the version as too old.
+#
+# The same two values are editable in the web UI under Settings, so this is
+# doing by hand what the user would otherwise have to. It is deliberately
+# cautious: it backs the database up, only touches those two keys, and only
+# when they do not already point at our build.
+point_ersatztv_at_ffmpeg() {
+  local db="/var/lib/ersatztv/.local/share/ersatztv/ersatztv.sqlite3"
+
+  if [[ ! -f "$db" ]]; then
+    # A fresh install has no database yet and will read PATH on first run.
+    skip "ErsatzTV has no settings database yet; it will pick up FFmpeg on first run"
+    return
+  fi
+  if ! command -v sqlite3 >/dev/null 2>&1; then
+    warn "sqlite3 is not available, so ErsatzTV's recorded FFmpeg path cannot be updated."
+    warn "  Set it by hand at Settings -> FFmpeg: ${FFMPEG_DIR}/bin/ffmpeg"
+    return
+  fi
+
+  local current
+  current="$(sqlite3 "$db" \
+    "SELECT Value FROM ConfigElement WHERE Key = 'ffmpeg.ffmpeg_path';" 2>/dev/null || true)"
+
+  if [[ "$current" == "${FFMPEG_DIR}/bin/ffmpeg" ]]; then
+    skip "ErsatzTV already points at ${FFMPEG_DIR}/bin"
+    return
+  fi
+  if [[ -z "$current" ]]; then
+    skip "ErsatzTV has not recorded an FFmpeg path; it will pick ours up from PATH"
+    return
+  fi
+
+  if (( DRY_RUN )); then
+    info "[dry-run] would repoint ErsatzTV from ${current} to ${FFMPEG_DIR}/bin/ffmpeg"
+    return
+  fi
+
+  # Stop it first so nothing is writing while we are.
+  local was_active=0
+  if systemctl is-active --quiet ersatztv.service 2>/dev/null; then
+    was_active=1
+    systemctl stop ersatztv.service
+  fi
+
+  local backup="${db}.$(date +%Y%m%d%H%M%S).bak"
+  cp -p "$db" "$backup"
+
+  if sqlite3 "$db" \
+      "UPDATE ConfigElement SET Value = '${FFMPEG_DIR}/bin/ffmpeg'  WHERE Key = 'ffmpeg.ffmpeg_path';
+       UPDATE ConfigElement SET Value = '${FFMPEG_DIR}/bin/ffprobe' WHERE Key = 'ffmpeg.ffprobe_path';" 2>/dev/null; then
+    ok "repointed ErsatzTV from ${current} to ${FFMPEG_DIR}/bin"
+    info "previous settings saved as ${backup}"
+  else
+    warn "could not update ErsatzTV's recorded FFmpeg path; restoring the backup."
+    warn "  Set it by hand at Settings -> FFmpeg: ${FFMPEG_DIR}/bin/ffmpeg"
+    cp -p "$backup" "$db"
+  fi
+
+  (( was_active )) && systemctl start ersatztv.service
+  return 0
 }
 
 # ---------------------------------------------------------------------------
