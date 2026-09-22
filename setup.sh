@@ -60,6 +60,9 @@ FORCE_CONFIG=0
 UNINSTALL=0
 DRY_RUN=0
 
+# Resolved by ensure_go before the build.
+GO_BIN=""
+
 REBOOT_REQUIRED=0
 declare -a WARNINGS=()
 declare -a NOTES=()
@@ -237,8 +240,6 @@ install_packages() {
     run env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${missing[@]}"
     ok "installed ${#missing[@]} package(s)"
   fi
-
-  ensure_go
 }
 
 # ensure_go finds a Go toolchain new enough to build the module, installing the
@@ -354,6 +355,11 @@ build_binaries() {
     skip "skipped (--skip-build)"
     return
   fi
+
+  # Here rather than with the package install: --skip-packages means "do not
+  # touch apt", and finding a Go toolchain is not an apt operation. Doing it
+  # there meant --skip-packages left GO_BIN unset and the build died on it.
+  [[ -n "$GO_BIN" ]] || ensure_go
 
   local version
   version="$(cd "$SCRIPT_DIR" && git describe --tags --always --dirty 2>/dev/null || echo dev)"
