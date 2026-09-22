@@ -226,13 +226,18 @@ func (s *Service) Refresh(ctx context.Context) error {
 			s.log.Warn("could not show the no-channel image", "error", err)
 		}
 	}
-	// The first successful read means the device has finished coming up, so the
-	// booting screen gives way to the one that invites the knob to be turned.
-	if !wasReady && !dropped && s.Current() == nil {
-		if err := s.ShowNoChannel(ctx); err != nil {
-			s.log.Debug("could not swap the booting screen", "error", err)
-		}
-	}
+	// Deliberately no decision about what is on screen here.
+	//
+	// Announcing the new list above hands the channel knob its bands, and the
+	// knob then selects a channel -- asynchronously, because loading a stream
+	// must not block the input path. Deciding here as well raced that
+	// selection: with a knob connected, Refresh found Current() still nil three
+	// milliseconds after the knob had chosen channel 1, and replaced it with
+	// the standby image.
+	//
+	// The caller owns the decision instead, where "has the knob ever reported"
+	// is knowable synchronously. See app.ChannelListChanged.
+	_ = wasReady
 	return nil
 }
 

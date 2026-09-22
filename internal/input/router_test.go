@@ -175,24 +175,43 @@ func TestRouterSetChannelCountReselectsImmediately(t *testing.T) {
 		t.Fatalf("no channels exist yet, got %+v", chs)
 	}
 
-	// ErsatzTV comes up with 5 channels: the knob's existing position must select
-	// straight away, without the user touching anything.
-	r.SetChannelCount(5)
+	// ErsatzTV comes up with 5 channels: the knob's existing position must
+	// select straight away, without the user touching anything. The decision is
+	// returned rather than dispatched, so the caller makes exactly one.
+	sel := r.SetChannelCount(5)
+	if sel == nil || sel.Band != 4 {
+		t.Fatalf("got %+v", sel)
+	}
+	// And nothing was pushed at the handler behind the caller's back.
 	chs, _, _, _ = h.snapshot()
-	if len(chs) != 1 || chs[0].Band != 4 {
-		t.Fatalf("got %+v", chs)
+	if len(chs) != 0 {
+		t.Errorf("SetChannelCount must not call the handler itself: %+v", chs)
+	}
+}
+
+func TestRouterSetChannelCountReportsNoVerdictUntilTheKnobHasSpoken(t *testing.T) {
+	// With channels available but no reading from the knob, the router cannot
+	// choose. Saying so lets the caller fall back to the standby screen instead
+	// of guessing a band the knob never asked for.
+	r, _, _ := newTestRouter(t)
+	if sel := r.SetChannelCount(5); sel != nil {
+		t.Errorf("got %+v, want nil until the knob reports", sel)
+	}
+
+	// With no channels at all the answer is "none" regardless.
+	if sel := r.SetChannelCount(0); sel == nil || sel.Band != -1 {
+		t.Errorf("got %+v, want band -1", sel)
 	}
 }
 
 func TestRouterChannelCountZeroDeselects(t *testing.T) {
-	r, h, _ := newTestRouter(t)
+	r, _, _ := newTestRouter(t)
 	r.SetChannelCount(3)
 	r.PotReport(PotChannel, 2048)
 
-	r.SetChannelCount(0) // ErsatzTV lost all its channels
-	chs, _, _, _ := h.snapshot()
-	if got := chs[len(chs)-1].Band; got != -1 {
-		t.Errorf("band with no channels: %d", got)
+	sel := r.SetChannelCount(0) // ErsatzTV lost all its channels
+	if sel == nil || sel.Band != -1 {
+		t.Errorf("band with no channels: %+v", sel)
 	}
 	if got := r.ChannelCount(); got != 0 {
 		t.Errorf("ChannelCount: %d", got)

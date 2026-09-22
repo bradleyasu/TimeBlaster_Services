@@ -30,15 +30,7 @@ func (a *App) OnChannelSelect(ev input.ChannelSelect) {
 	if a.media == nil {
 		return
 	}
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-
-		if err := a.media.SelectBand(ctx, ev.Band); err != nil {
-			a.log.Warn("could not act on the channel knob",
-				"band", ev.Band, "position", ev.Position, "error", err)
-		}
-	}()
+	a.requestBand(ev.Band)
 }
 
 // OnVolumeChange handles movement of the alarm-volume potentiometer.
@@ -268,7 +260,21 @@ func (a *App) LinkDown(err error) {
 // re-divides the knob's travel immediately, with no restart and nothing
 // hardcoded.
 func (a *App) ChannelListChanged(channels []ersatztv.Channel) {
-	a.router.SetChannelCount(len(channels))
+	// Re-band the knob for the new count and take its verdict. A nil verdict
+	// means the knob has never reported a position, so it cannot choose and the
+	// standby screen is the answer until it does.
+	//
+	// Exactly one request follows, which is the point: this used to both ask
+	// the knob and separately decide for itself, and the two raced.
+	band := -1
+	if sel := a.router.SetChannelCount(len(channels)); sel != nil {
+		band = sel.Band
+	} else if len(channels) > 0 {
+		a.log.Info("channels are available but the channel knob has not reported; "+
+			"showing the standby screen until it does", "channels", len(channels))
+	}
+	a.requestBand(band)
+
 	a.publish(state.NewEvent(state.EventChannelsChanged, channels))
 }
 

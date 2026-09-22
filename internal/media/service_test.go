@@ -398,15 +398,38 @@ func TestBootingScreenShowsUntilTheChannelListLoads(t *testing.T) {
 		t.Error("a failed refresh should leave the booting screen up")
 	}
 
-	// ErsatzTV finishes starting: the screen swaps by itself, with no channel
-	// selected and nobody having touched anything.
+	// ErsatzTV finishes starting. Refresh itself does not touch the screen --
+	// deciding here as well raced the channel knob -- it announces the new list
+	// and the caller acts on it.
 	f.etv.SetError(nil)
 	if err := f.svc.Refresh(ctx); err != nil {
 		t.Fatal(err)
 	}
+	if f.obs.listCount() == 0 {
+		t.Fatal("the new channel list was not announced")
+	}
+
+	// Acting on it swaps the screen, because the service is now ready.
+	if err := f.svc.SelectBand(ctx, -1); err != nil {
+		t.Fatal(err)
+	}
 	if !lastLoadIsNoChannel(t, f) {
-		t.Errorf("expected the swap to the no-channel screen, got %+v",
+		t.Errorf("expected the no-channel screen once ready, got %+v",
 			f.player.CallsNamed("loadfile"))
+	}
+}
+
+func TestRefreshDoesNotTouchTheScreen(t *testing.T) {
+	// The regression this guards: Refresh announced the channel list, the knob
+	// picked channel 1 asynchronously, and Refresh then found Current() still
+	// nil and replaced it with the standby image three milliseconds later.
+	f := newFixture(t, chans()...)
+	ctx := context.Background()
+	if err := f.svc.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(f.player.CallsNamed("loadfile")); n != 0 {
+		t.Errorf("Refresh loaded %d files; deciding what is on screen is the caller's job", n)
 	}
 }
 

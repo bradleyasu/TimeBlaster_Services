@@ -70,6 +70,16 @@ type App struct {
 
 	// ownsStore records whether we opened the database and must close it.
 	ownsStore bool
+
+	// screenReq carries the latest band the television should be showing: a
+	// channel index, or -1 for the standby screen.
+	//
+	// One buffered slot, newest wins. Every decision about what is on screen
+	// goes through here and is applied by a single goroutine, which is what
+	// stops two of them racing -- loading a stream takes seconds and must not
+	// block the input path, so the work has to be asynchronous, and once it is
+	// asynchronous the only safe number of deciders is one.
+	screenReq chan int
 }
 
 // New assembles the application.
@@ -93,12 +103,13 @@ func New(cfg config.Config, log *slog.Logger, version string, deps Deps) (*App, 
 	}
 
 	a := &App{
-		cfg:     cfg,
-		log:     log,
-		clock:   clock,
-		version: version,
-		sup:     newSupervisor(log),
-		tracker: state.NewTracker(version, cfg.General.Hostname, clock.Now()),
+		cfg:       cfg,
+		log:       log,
+		clock:     clock,
+		version:   version,
+		sup:       newSupervisor(log),
+		tracker:   state.NewTracker(version, cfg.General.Hostname, clock.Now()),
+		screenReq: make(chan int, 1),
 	}
 
 	if err := ensureRuntimeDir(cfg.Storage.RuntimeDir); err != nil {
@@ -419,6 +430,7 @@ func (a *App) registerTasks() {
 	if a.media != nil {
 		a.sup.add("channel-refresh", false, a.media.Run)
 	}
+	a.sup.add("screen", false, a.runScreen)
 	a.sup.add("clock-broadcast", false, a.runClockBroadcast)
 	a.sup.add("sound-library-refresh", false, a.runLibraryRefresh)
 }
@@ -472,6 +484,52 @@ func (a *App) shutdown() {
 		}
 	}
 	a.log.Info("timeblaster stopped")
+}
+
+// runScreen applies channel selections, one at a time and in order.
+//
+// Requests arrive from the channel knob, from the channel list changing, and
+// from the companion app. Applying them concurrently let a slow one finish
+// after a newer one and leave the wrong thing on screen; applying them here
+// means the most recent request always wins.
+func (a *App) runScreen(ctx context.Context) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case band := <-a.screenReq:
+			if a.media == nil {
+				continue
+			}
+			// Bounded, because a stream that will not start must not wedge the
+			// queue and leave later requests unapplied.
+			reqCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			err := a.media.SelectBand(reqCtx, band)
+			cancel()
+			if err != nil {
+				a.log.Warn("could not put the requested channel on screen",
+					"band", band, "error", err)
+			}
+		}
+	}
+}
+
+// requestBand asks for a band to be shown. It never blocks: a pending request
+// that has not been applied yet is simply replaced, because a burst of knob
+// movement only ever means "show me where it ended up".
+func (a *App) requestBand(band int) {
+	// Discard a request that has not been applied yet, then post this one. Both
+	// steps are non-blocking, so a knob being swept never stalls the input path.
+	select {
+	case <-a.screenReq:
+	default:
+	}
+	select {
+	case a.screenReq <- band:
+	default:
+		// Another caller got there in between. Theirs is at least as fresh as
+		// this one, so leaving it alone is correct.
+	}
 }
 
 // runClockBroadcast pushes the time to connected apps once a second.

@@ -110,7 +110,16 @@ func newHarness(t *testing.T, mutate func(*config.Config)) *harness {
 	}
 	h.app = application
 	h.store = application.store
-	t.Cleanup(func() { application.shutdown() })
+
+	// Channel selections are applied by a single ordered worker, so the tests
+	// need it running just as the daemon does.
+	screenCtx, stopScreen := context.WithCancel(context.Background())
+	go func() { _ = application.runScreen(screenCtx) }()
+
+	t.Cleanup(func() {
+		stopScreen()
+		application.shutdown()
+	})
 	return h
 }
 
@@ -790,5 +799,80 @@ func TestDisplayOnPrefersTheNewKeyOverTheLegacyOne(t *testing.T) {
 	}
 	if !h.app.Settings().DisplayOn {
 		t.Error("the current key should win over the legacy one")
+	}
+}
+
+func TestChannelsAppearingDoesNotClobberTheKnobsChoice(t *testing.T) {
+	// The bug this reproduces, seen on the Pi: with the knob already reporting,
+	// ErsatzTV coming up logged "channel change number=1" and then, three
+	// milliseconds later, "no channel selected; showing the static image".
+	// The television played the channel while the daemon believed nothing was
+	// selected -- two deciders racing for the screen, and the slower one won.
+	h := newHarness(t, nil)
+
+	// The knob reports before any channels exist, which is the ordinary case:
+	// the Nano is powered by the Pi and connects long before ErsatzTV is up.
+	h.app.router.PotReport(input.PotChannel, 400) // low end -> band 0
+	if cur := h.app.media.Current(); cur != nil {
+		t.Fatalf("nothing should be selectable yet: %+v", cur)
+	}
+
+	// ErsatzTV finishes starting.
+	h.syncChannels(t)
+
+	waitFor(t, "the knob's channel to be selected", func() bool {
+		cur := h.app.media.Current()
+		return cur != nil && cur.Number == "1"
+	})
+
+	// And it must stay selected. The clobber landed milliseconds later, so a
+	// settle here is what would have caught it.
+	time.Sleep(150 * time.Millisecond)
+	cur := h.app.media.Current()
+	if cur == nil {
+		t.Fatal("the selection was overwritten by the standby screen")
+	}
+	if cur.Number != "1" {
+		t.Errorf("current channel: %s", cur.Number)
+	}
+}
+
+func TestChannelsAppearingWithNoKnobShowsStandby(t *testing.T) {
+	// The other half: with no Nano attached nothing will ever select a channel,
+	// so the standby screen has to be the answer rather than a black screen.
+	h := newHarness(t, nil)
+	h.syncChannels(t)
+
+	waitFor(t, "the standby screen", func() bool {
+		for _, c := range h.player.CallsNamed("loadfile") {
+			if url, _ := c.Args[1].(string); strings.HasSuffix(url, "no-channel.png") {
+				return true
+			}
+		}
+		return false
+	})
+	if cur := h.app.media.Current(); cur != nil {
+		t.Errorf("nothing should be selected without a knob: %+v", cur)
+	}
+}
+
+func TestRapidKnobMovementAppliesTheFinalPosition(t *testing.T) {
+	// Sweeping the knob queues a burst of selections. Loading a stream takes
+	// seconds, so they must not be applied concurrently and finish out of
+	// order -- what matters is where the knob ended up.
+	h := newHarness(t, nil)
+	h.syncChannels(t)
+
+	for _, raw := range []int{400, 1200, 2000, 2800, 3800} {
+		h.app.router.PotReport(input.PotChannel, raw)
+	}
+
+	waitFor(t, "the final channel", func() bool {
+		cur := h.app.media.Current()
+		return cur != nil && cur.Number == "4"
+	})
+	time.Sleep(150 * time.Millisecond)
+	if cur := h.app.media.Current(); cur == nil || cur.Number != "4" {
+		t.Errorf("a stale selection won the race: %+v", cur)
 	}
 }

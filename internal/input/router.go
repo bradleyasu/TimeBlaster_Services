@@ -154,23 +154,31 @@ func (r *Router) SetHandler(h Handler) {
 // called whenever the ErsatzTV channel list is refreshed, and it re-evaluates the
 // knob's current position immediately so that adding a channel takes effect
 // without the user having to touch anything.
-func (r *Router) SetChannelCount(n int) {
+//
+// It returns the resulting selection rather than calling the handler, so the
+// caller makes exactly one decision about what should be on screen. Calling the
+// handler here as well gave two sources racing to own the television, and the
+// slower one won: a knob that had already chosen channel 1 was overwritten by
+// the standby image three milliseconds later.
+//
+// A nil return means the knob has never reported a position, so it cannot
+// choose anything and the caller decides.
+func (r *Router) SetChannelCount(n int) *ChannelSelect {
 	r.mu.Lock()
 	r.bands.SetCount(n, 0)
 	primed := r.filters[PotChannel].Primed()
 	pos := r.filters[PotChannel].Value()
 	var ev *ChannelSelect
+	// With no channels there is nothing to be primed for: the answer is "none"
+	// either way, and saying so is what clears the screen.
 	if primed || n == 0 {
 		band, _ := r.bands.Update(pos)
 		ev = &ChannelSelect{Band: band, Position: pos}
 	}
-	h := r.handler
 	r.mu.Unlock()
 
-	r.log.Info("channel count updated", "channels", n)
-	if ev != nil && h != nil {
-		h.OnChannelSelect(*ev)
-	}
+	r.log.Info("channel count updated", "channels", n, "knob_reported", primed)
+	return ev
 }
 
 // ChannelCount reports the number of bands the channel knob is divided into.
