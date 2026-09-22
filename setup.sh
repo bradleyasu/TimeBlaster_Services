@@ -41,6 +41,10 @@ readonly SYSTEMD_DIR="/etc/systemd/system"
 readonly ERSATZTV_DIR="/opt/ersatztv"
 readonly ERSATZTV_USER="ersatztv"
 readonly ERSATZTV_STATE="/var/lib/ersatztv"
+# ErsatzTV builds its own FFmpeg and checks the version at runtime; Debian's is
+# older than it wants. Kept out of /usr/bin so nothing else on the system is
+# shadowed by it.
+readonly FFMPEG_DIR="/opt/ersatztv-ffmpeg"
 
 # Minimum Go version able to build this module.
 readonly GO_MIN_MAJOR=1
@@ -846,6 +850,100 @@ ensure_ersatztv_service() {
   fi
 }
 
+# install_ffmpeg installs the FFmpeg build ErsatzTV expects.
+#
+# ErsatzTV's own health page rejects the FFmpeg that ships with Debian --
+# "version 7.1.5 is too old; please install 8.1.2" -- because it relies on
+# features and fixes in its own build. Rather than shadowing the system FFmpeg,
+# this goes in its own directory and ersatztv.service puts it first on PATH, so
+# nothing else on the machine is affected.
+install_ffmpeg() {
+  step "Installing FFmpeg for ErsatzTV"
+
+  if (( SKIP_ERSATZTV )); then
+    skip "skipped (--skip-ersatztv)"
+    return
+  fi
+
+  local arch asset_arch
+  arch="$(dpkg --print-architecture)"
+  case "$arch" in
+    arm64) asset_arch="linuxarm64" ;;
+    amd64) asset_arch="linux64" ;;
+    *)
+      warn "no ErsatzTV FFmpeg build for ${arch}; leaving the system FFmpeg in place."
+      warn "  ErsatzTV may report it as too old."
+      return
+      ;;
+  esac
+
+  local api="https://api.github.com/repos/ErsatzTV/ErsatzTV-ffmpeg/releases/latest"
+  local tag
+  tag="$(curl -fsSL "$api" 2>/dev/null | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name":\s*"([^"]+)".*/\1/' || true)"
+  if [[ -z "$tag" ]]; then
+    warn "could not reach the ErsatzTV FFmpeg release API; leaving the system FFmpeg."
+    return
+  fi
+
+  local installed=""
+  [[ -f "${FFMPEG_DIR}/.version" ]] && installed="$(cat "${FFMPEG_DIR}/.version")"
+  if [[ "$installed" == "$tag" && -x "${FFMPEG_DIR}/bin/ffmpeg" ]]; then
+    skip "ErsatzTV FFmpeg ${tag} is already installed"
+    return
+  fi
+
+  local url
+  url="$(curl -fsSL "$api" 2>/dev/null | grep '"browser_download_url"' \
+        | grep -- "-${asset_arch}-" | head -1 \
+        | sed -E 's/.*"browser_download_url":\s*"([^"]+)".*/\1/' || true)"
+  if [[ -z "$url" ]]; then
+    warn "no ${asset_arch} asset in ErsatzTV FFmpeg release ${tag}; skipping"
+    return
+  fi
+
+  info "downloading FFmpeg ${tag} (${asset_arch}); this is around 100 MB"
+  local tmp
+  tmp="$(mktemp -d)"
+  if ! run curl -fsSL --retry 3 -o "${tmp}/ffmpeg.tar.xz" "$url"; then
+    rm -rf "$tmp"
+    warn "the FFmpeg download failed; leaving the system FFmpeg in place."
+    return
+  fi
+
+  if (( DRY_RUN )); then
+    info "[dry-run] would install FFmpeg ${tag} to ${FFMPEG_DIR}"
+    rm -rf "$tmp"
+    return
+  fi
+
+  # Same versioned-wrapper layout as the ErsatzTV archive, with the binaries
+  # under bin/, so find them rather than assuming a path.
+  run tar -xJf "${tmp}/ffmpeg.tar.xz" -C "$tmp"
+  local payload
+  payload="$(find "$tmp" -mindepth 2 -maxdepth 4 -type f -name ffmpeg -perm -u+x -print -quit 2>/dev/null)"
+  payload="${payload%/bin/ffmpeg}"
+
+  if [[ -z "$payload" || ! -x "${payload}/bin/ffmpeg" ]]; then
+    rm -rf "$tmp"
+    warn "the FFmpeg archive did not contain the expected bin/ffmpeg; skipping"
+    return
+  fi
+
+  run install -d -m 0755 "${FFMPEG_DIR}/bin"
+  run install -m 0755 -o root -g root "${payload}/bin/ffmpeg" "${FFMPEG_DIR}/bin/ffmpeg"
+  run install -m 0755 -o root -g root "${payload}/bin/ffprobe" "${FFMPEG_DIR}/bin/ffprobe"
+  [[ -f "${payload}/LICENSE.txt" ]] && \
+    run install -m 0644 -o root -g root "${payload}/LICENSE.txt" "${FFMPEG_DIR}/LICENSE.txt"
+  rm -rf "$tmp"
+
+  printf '%s\n' "$tag" > "${FFMPEG_DIR}/.version"
+
+  local got
+  got="$("${FFMPEG_DIR}/bin/ffmpeg" -version 2>/dev/null | head -1 | awk '{print $3}')"
+  ok "installed FFmpeg ${got:-$tag} to ${FFMPEG_DIR}/bin"
+  note "ErsatzTV uses ${FFMPEG_DIR}/bin; the system FFmpeg is untouched."
+}
+
 # ---------------------------------------------------------------------------
 # systemd
 # ---------------------------------------------------------------------------
@@ -1079,6 +1177,7 @@ main() {
   configure_hostname
   configure_console
   install_ersatztv
+  install_ffmpeg
   install_services
 
   local start_failed=0

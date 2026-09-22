@@ -18,6 +18,12 @@ User=ersatztv
 Group=ersatztv
 WorkingDirectory=/opt/ersatztv
 
+# ErsatzTV builds its own FFmpeg and rejects Debian's as too old, so its own
+# build goes first on PATH. It is confined to this unit, which leaves the system
+# FFmpeg in place for everything else. If ErsatzTV has already recorded a path
+# in its settings, change it there too: Settings -> FFmpeg.
+Environment=PATH=/opt/ersatztv-ffmpeg/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
 # ErsatzTV keeps its database and transcode scratch space here.
 Environment=ERSATZTV_BASE_DIRECTORY=/var/lib/ersatztv
 Environment=ERSATZTV_TRANSCODE_DIRECTORY=/var/lib/ersatztv/transcode
