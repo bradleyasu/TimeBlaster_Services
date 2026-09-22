@@ -336,6 +336,14 @@ sudo timeblaster-splash --clear
 sudo systemctl start timeblaster.service
 ```
 
+### ErsatzTV warns about hardware acceleration
+
+"The following channels use ffmpeg profiles that are not configured for
+hardware acceleration (Nvenc)" is a **false positive on a Raspberry Pi** and
+should be ignored — enabling NVENC would break the channel, because there is no
+NVIDIA GPU, and the Pi 5 has no hardware video encoder of any kind. See
+[ersatztv.md](ersatztv.md#not-configured-for-hardware-acceleration-nvenc).
+
 ### The television says "BOOTING, PLEASE STAND BY..." long after boot
 
 That screen stays up until the channel list has been read for the first time,

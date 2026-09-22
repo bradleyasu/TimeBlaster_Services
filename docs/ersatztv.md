@@ -104,6 +104,45 @@ Timeblaster picks up channel changes within `ersatztv.refresh_interval` (default
 60 s), or immediately via the companion app's **REFRESH** button or
 `curl -X POST http://timeblaster.local:8080/api/channels/refresh`.
 
+## "Not configured for hardware acceleration (Nvenc)"
+
+ErsatzTV's health page reports this against every channel on a Raspberry Pi.
+**Ignore it. Acting on it will break playback.**
+
+The warning comes from ErsatzTV noticing that its FFmpeg build has NVENC
+compiled in while no profile uses it. Compiled in is not the same as present:
+NVENC is NVIDIA's encoder, and a Raspberry Pi has no NVIDIA GPU.
+
+Worse, the Pi 5 has **no hardware video encoder at all**. The Pi 4's H.264
+encoder block was dropped; what remains is an HEVC *decoder* (`/dev/video19`,
+`rpi-hevc-dec`) and the camera ISP. Both hardware encoders fail outright:
+
+```console
+$ ffmpeg -f lavfi -i testsrc -frames:v 2 -c:v h264_nvenc -f null -
+[h264_nvenc] Cannot load libcuda.so.1
+
+$ ffmpeg -f lavfi -i testsrc -frames:v 2 -c:v h264_v4l2m2m -f null -
+[h264_v4l2m2m] Could not find a valid device
+```
+
+So leaving hardware acceleration set to **None** is the only correct setting
+here, and the warning is a false positive on this hardware.
+
+### What to do instead
+
+The lever that actually matters on a Pi is **not transcoding in the first
+place**. Software encoding with libx264 works, but it burns CPU and heat that
+the device would rather spend elsewhere — and the whole point of the media
+format below is to avoid needing it.
+
+```bash
+# While a channel is playing. An idle ffmpeg means it is streaming direct.
+top -b -n1 | head -15
+```
+
+If FFmpeg is busy, the fix is the media, not the encoder: convert the library to
+H.264/AAC in MP4 and try `stream_mode = "hls-direct"`.
+
 ## Streaming mode
 
 ```toml
