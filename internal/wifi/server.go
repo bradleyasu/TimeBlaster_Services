@@ -274,6 +274,7 @@ func (s *Server) EnterSetup(ctx context.Context) error {
 			if i == 0 {
 				continue // no stale profile to delete
 			}
+			err = redactSecret(err, s.cfg.SetupPassphrase)
 			s.setError(err.Error())
 			// Leave the interface in a usable state rather than half-configured.
 			s.teardownAP(ctx)
@@ -294,7 +295,20 @@ func (s *Server) EnterSetup(ctx context.Context) error {
 	s.mu.Unlock()
 
 	if err := s.portal.Start(setupCtx); err != nil {
-		s.log.Error("could not start the captive portal; the access point is up but unusable", "error", err)
+		// An access point with no portal behind it is worse than no access point
+		// at all. The Pi has already left the user's network by this point, so
+		// carrying on would leave the device unreachable AND unconfigurable
+		// until the setup timeout expired -- fifteen minutes of a dead
+		// appliance, recoverable only by waiting or pulling the power.
+		//
+		// ExitSetup does the whole rollback: cancel the setup context, stop the
+		// portal, tear the access point down and restore the previous network.
+		s.log.Error("could not start the captive portal; leaving setup mode again", "error", err)
+		if exitErr := s.ExitSetup(ctx); exitErr != nil {
+			s.log.Error("could not roll back after the portal failed to start", "error", exitErr)
+		}
+		s.setError(err.Error())
+		return fmt.Errorf("wifi: starting the captive portal: %w", err)
 	}
 
 	// Setup mode ends by itself so a forgotten access point does not stay up.
@@ -398,7 +412,7 @@ func (s *Server) Connect(ctx context.Context, ssid, passphrase string, hidden bo
 	connectCtx, cancel := context.WithTimeout(ctx, s.cfg.ConnectTimeout.Duration)
 	defer cancel()
 
-	_, err := s.runner.Run(connectCtx, "nmcli", ConnectArgs(s.cfg.Interface, ssid, passphrase, hidden)...)
+	err := s.joinNetwork(connectCtx, ssid, passphrase, hidden, previous)
 	if err != nil {
 		msg := friendlyConnectError(err)
 		s.log.Warn("could not join the network", "ssid", ssid, "error", err)
@@ -450,17 +464,47 @@ func (s *Server) rollback(ctx context.Context, previous string, wasSetup bool) b
 				"connection", previous, "error", err)
 		}
 	}
-	if wasSetup && !restored {
-		// Keep setup mode available so the user can try a different password
-		// without having to hold the button again.
-		s.mu.Lock()
-		s.mode = ModeNormal // EnterSetup returns early otherwise
-		s.mu.Unlock()
+	if !wasSetup {
+		return restored
+	}
+
+	// Either way setup mode is over as far as the hardware is concerned: the
+	// access point and the captive portal were both torn down before the
+	// attempt was made. Only the flag is left, and leaving it set told the rest
+	// of the daemon the device was still in setup with nothing behind it --
+	// which is what left the seven-segment display reading SETUP indefinitely
+	// after a failed join.
+	s.clearSetupState()
+
+	if !restored {
+		// Nothing to fall back to, so put the access point back up: the user
+		// has no other way to reach the device and try a different password.
 		if err := s.EnterSetup(ctx); err != nil {
 			s.log.Error("could not restore setup mode after a failed attempt", "error", err)
 		}
+		return restored
 	}
+	s.log.Info("left setup mode after a failed attempt; the previous network is back",
+		"connection", previous)
 	return restored
+}
+
+// clearSetupState returns the helper to normal mode without touching the
+// network, which the caller has already dealt with.
+//
+// Cancelling the setup context also stops the expiry goroutine watching the
+// old setup window; without that, every retry left one behind.
+func (s *Server) clearSetupState() {
+	s.mu.Lock()
+	cancel := s.setupCancel
+	s.mode = ModeNormal
+	s.setupSince = time.Time{}
+	s.setupExpires = time.Time{}
+	s.setupCancel = nil
+	s.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 }
 
 // waitForAddress polls until the interface has an IPv4 address or the timeout
@@ -515,6 +559,85 @@ func (s *Server) maxOperationTime() time.Duration {
 
 // friendlyConnectError turns nmcli's output into something a person standing in
 // front of the device can act on.
+// joinNetwork builds a profile for the network and brings it up.
+//
+// The security type is stated rather than inferred. NetworkManager will not
+// accept a passphrase without key management, and the scan that `nmcli device
+// wifi connect` would have read it from is unreliable immediately after the
+// access point comes down -- which is precisely when the captive portal needs
+// this to work.
+//
+// A secured network is tried as WPA/WPA2 first and then as WPA3-only. Nearly
+// every home network is the former, or runs in a transitional mode that accepts
+// it; falling back covers the rest without having to ask the user which it is.
+func (s *Server) joinNetwork(ctx context.Context, ssid, passphrase string, hidden bool, previous string) error {
+	modes := []string{KeyMgmtOpen}
+	if passphrase != "" {
+		modes = []string{KeyMgmtWPAPSK, KeyMgmtSAE}
+	}
+
+	var lastErr error
+	for _, keyMgmt := range modes {
+		cmds := ConnectCommands(s.cfg.Interface, ssid, passphrase, hidden, keyMgmt)
+
+		var failed error
+		for i, args := range cmds {
+			if i == 0 {
+				// Removing a stale profile of the same name. Absent is the
+				// normal case, and it must never remove the network we are
+				// holding as the rollback target.
+				if len(args) >= 3 && args[2] == previous {
+					continue
+				}
+				_, _ = s.runner.Run(ctx, "nmcli", args...)
+				continue
+			}
+			if _, err := s.runner.Run(ctx, "nmcli", args...); err != nil {
+				// Redact immediately: the runner puts the whole command line
+				// into its error, and the psk is one of the arguments.
+				failed = redactSecret(err, passphrase)
+				break
+			}
+		}
+		if failed == nil {
+			s.log.Info("joined the network", "ssid", ssid, "key_mgmt", keyMgmtName(keyMgmt))
+			return nil
+		}
+		lastErr = failed
+		s.log.Debug("join attempt failed", "ssid", ssid, "key_mgmt", keyMgmtName(keyMgmt), "error", failed)
+	}
+	return lastErr
+}
+
+func keyMgmtName(k string) string {
+	if k == KeyMgmtOpen {
+		return "open"
+	}
+	return k
+}
+
+// redactSecret removes a passphrase from an error's text.
+//
+// system.ExecRunner formats its errors as "<name> <args...>: <err>: <stderr>",
+// so every failed nmcli invocation carries the full command line -- password
+// included. That error is logged, wrapped into the message shown in the captive
+// portal, and stored as the helper's last error, so a single unredacted return
+// puts the user's Wi-Fi passphrase in three places at once.
+//
+// Redacting the text is a backstop, not a substitute for keeping the secret off
+// the command line in the first place: an argument is also visible in /proc to
+// any local user for as long as nmcli runs.
+func redactSecret(err error, secret string) error {
+	if err == nil || secret == "" {
+		return err
+	}
+	text := strings.ReplaceAll(err.Error(), secret, "****")
+	if text == err.Error() {
+		return err
+	}
+	return errors.New(text)
+}
+
 func friendlyConnectError(err error) string {
 	msg := err.Error()
 	lower := strings.ToLower(msg)

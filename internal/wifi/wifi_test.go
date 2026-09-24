@@ -1,16 +1,17 @@
 package wifi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -145,18 +146,43 @@ func TestCommandBuilders(t *testing.T) {
 		t.Errorf("ScanArgs: %v", got)
 	}
 
-	got := ConnectArgs("wlan0", "Home", "hunter22", false)
-	want := []string{"device", "wifi", "connect", "Home", "ifname", "wlan0", "password", "hunter22"}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("ConnectArgs:\n got %v\nwant %v", got, want)
+	// A secured network states its key management explicitly. Letting nmcli
+	// infer it from the scan is what failed on real hardware: straight out of
+	// access-point mode there is no usable scan, so the passphrase was attached
+	// to a profile with no key management and NetworkManager refused it.
+	joinSecured := flatten(ConnectCommands("wlan0", "Home", "hunter22", false, KeyMgmtWPAPSK))
+	for _, want := range []string{
+		"802-11-wireless-security.key-mgmt wpa-psk",
+		"802-11-wireless-security.psk hunter22",
+		"ssid Home", "ifname wlan0",
+	} {
+		if !strings.Contains(joinSecured, want) {
+			t.Errorf("ConnectCommands is missing %q: %s", want, joinSecured)
+		}
+	}
+	// Inferring security from the scan is what failed on real hardware: coming
+	// out of access-point mode there is no usable scan, so nmcli attached the
+	// passphrase to a profile with no key management and NetworkManager refused
+	// it with "802-11-wireless-security.key-mgmt: property is missing".
+	if strings.Contains(joinSecured, "device wifi connect") {
+		t.Errorf("must not infer security via `nmcli device wifi connect`: %s", joinSecured)
 	}
 
-	open := ConnectArgs("wlan0", "CoffeeShop", "", false)
-	if contains(open, "password") {
-		t.Errorf("an open network must not pass a password: %v", open)
+	joinOpen := flatten(ConnectCommands("wlan0", "CoffeeShop", "", false, KeyMgmtOpen))
+	if strings.Contains(joinOpen, "802-11-wireless-security") {
+		t.Errorf("an open network must not carry security settings: %s", joinOpen)
 	}
-	if hidden := ConnectArgs("wlan0", "Secret", "", true); !contains(hidden, "hidden") {
-		t.Errorf("hidden flag missing: %v", hidden)
+
+	joinHidden := flatten(ConnectCommands("wlan0", "Secret", "", true, KeyMgmtOpen))
+	if !strings.Contains(joinHidden, "802-11-wireless.hidden yes") {
+		t.Errorf("hidden flag missing: %s", joinHidden)
+	}
+
+	// Any stale profile of that name is removed first, and the new one is
+	// brought up by name.
+	seq := ConnectCommands("wlan0", "Home", "x", false, KeyMgmtWPAPSK)
+	if len(seq) != 3 || seq[0][1] != "delete" || seq[2][1] != "up" {
+		t.Errorf("unexpected command sequence: %v", seq)
 	}
 
 	cmds := APUpArgs("wlan0", "TIMEBLASTER-SETUP", "", "10.42.0.1/24")
@@ -265,9 +291,16 @@ func newTestServer(t *testing.T) (*Server, *system.FakeRunner, *system.FakeClock
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	cfg.HelperSocket = filepath.Join(dir, "w.sock")
 
+	// The real setup address is 10.42.0.1, which no test machine has, and the
+	// real portal port is 80, which needs root. Both were failing silently and
+	// letting these tests pass without ever starting a portal.
+	cfg.SetupAddress = "127.0.0.1/24"
+
 	runner := system.NewFakeRunner()
 	clk := system.NewFakeClock(time.Date(2026, 9, 18, 6, 0, 0, 0, time.UTC))
-	return NewServer(cfg, runner, clk, testLogger()), runner, clk
+	s := NewServer(cfg, runner, clk, testLogger())
+	s.portal.port = "0" // an ephemeral port
+	return s, runner, clk
 }
 
 func TestServerEnterAndExitSetup(t *testing.T) {
@@ -364,8 +397,15 @@ func TestServerConnectSuccess(t *testing.T) {
 	}
 
 	joined := flattenCalls(runner.Calls())
-	if !strings.Contains(joined, "device wifi connect Home ifname wlan0 password hunter22") {
-		t.Errorf("connect command:\n%s", joined)
+	for _, want := range []string{
+		"connection add type wifi",
+		"802-11-wireless-security.key-mgmt wpa-psk",
+		"802-11-wireless-security.psk hunter22",
+		"connection up Home",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("connect sequence is missing %q:\n%s", want, joined)
+		}
 	}
 	if s.Status(ctx).Mode == ModeSetup {
 		t.Error("a successful connection should leave setup mode")
@@ -380,7 +420,11 @@ func TestServerConnectRollsBackOnWrongPassword(t *testing.T) {
 		switch {
 		case contains(c.Args, "--active"):
 			return []byte("Home Network:wlan0:802-11-wireless\n"), nil
-		case len(c.Args) >= 3 && c.Args[0] == "device" && c.Args[1] == "wifi" && c.Args[2] == "connect":
+		// Only this network's profile fails to come up. `connection up` also
+		// raises the setup access point and performs the rollback, and both of
+		// those must keep working.
+		case len(c.Args) >= 3 && c.Args[0] == "connection" && c.Args[1] == "up" &&
+			c.Args[2] == "Neighbour":
 			return nil, errors.New("Error: Connection activation failed: (7) Secrets were required")
 		}
 		return nil, nil
@@ -783,4 +827,131 @@ func flattenCalls(calls []system.RecordedCommand) string {
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+func TestEnterSetupRollsBackWhenThePortalCannotStart(t *testing.T) {
+	// An access point with no portal behind it is a stranded device: the Pi has
+	// already left the user's network, and there is nothing there to configure
+	// it with. The old behaviour logged the failure and carried on, which cost
+	// the full fifteen-minute setup timeout with the appliance unreachable.
+	s, runner, _ := newTestServer(t)
+	// TEST-NET-3, which is never assigned to a host, so the listen must fail.
+	s.portal.cfg.SetupAddress = "203.0.113.1/24"
+
+	err := s.EnterSetup(context.Background())
+	if err == nil {
+		t.Fatal("EnterSetup must fail when the captive portal cannot start")
+	}
+	if mode := s.Status(context.Background()).Mode; mode == ModeSetup {
+		t.Errorf("the device was left stranded in setup mode: %v", mode)
+	}
+	if s.portal.Running() {
+		t.Error("the portal reports itself running after a failed start")
+	}
+
+	// The access point must have been taken back down, not left broadcasting.
+	var deleted bool
+	for _, c := range runner.Calls() {
+		if c.Name == "nmcli" && len(c.Args) >= 2 &&
+			c.Args[0] == "connection" && c.Args[1] == "delete" {
+			deleted = true
+		}
+	}
+	if !deleted {
+		t.Error("the access point was not torn down after the portal failed")
+	}
+}
+
+func TestConnectDoesNotLeakThePassphrase(t *testing.T) {
+	// The command runner puts the whole command line into its error, and
+	// `nmcli device wifi connect` takes the password as an argument. This was
+	// found by reading a real journal on real hardware and seeing a real Wi-Fi
+	// password sitting in it.
+	//
+	// The error shape matters: an nmcli failure friendlyConnectError does not
+	// recognise falls through to its default branch, which embeds the raw text
+	// in the message shown in the captive portal and stored as the last error.
+	// A recognised failure only leaks into the log. Both paths are checked.
+	const secret = "correct-horse-battery-staple"
+
+	var logs bytes.Buffer
+	s, runner, _ := newTestServer(t)
+	s.log = slog.New(slog.NewTextHandler(&logs, nil))
+
+	runner.OnRun = func(c system.RecordedCommand) ([]byte, error) {
+		if len(c.Args) >= 2 && c.Args[0] == "connection" && c.Args[1] == "add" {
+			// Mimic ExecRunner, which joins every argument into the error. The
+			// passphrase rides on `connection add` as 802-11-wireless-security.psk,
+			// so this is the command whose failure carries the secret. The
+			// message is one no friendly-message rule matches, so the raw text
+			// reaches the portal message and stored error too.
+			return nil, fmt.Errorf("nmcli %s: exit status 1: %s",
+				strings.Join(c.Args, " "), "Error: something unrecognised went wrong.")
+		}
+		return nil, nil
+	}
+
+	res, err := s.Connect(context.Background(), "the_wifi", secret, false)
+	if err == nil {
+		t.Fatal("expected the connection to fail")
+	}
+	for what, text := range map[string]string{
+		"returned error": err.Error(),
+		"portal message": res.Message,
+		"stored lastErr": s.Status(context.Background()).LastError,
+		"log output":     logs.String(),
+	} {
+		if strings.Contains(text, secret) {
+			t.Errorf("the passphrase leaked into the %s: %q", what, text)
+		}
+	}
+	if !strings.Contains(logs.String(), "****") {
+		t.Errorf("expected the log to show a redaction marker, got: %q", logs.String())
+	}
+}
+
+func TestFailedConnectDuringSetupLeavesSetupMode(t *testing.T) {
+	// A failed join whose rollback SUCCEEDED used to leave mode == setup
+	// forever. The access point and the portal are torn down before the attempt,
+	// so nothing was left to clear the flag. The daemon polls this to know when
+	// to put the seven-segment display back to the clock, so the display sat on
+	// SETUP long after the device was back on the user's network -- which is
+	// exactly what happened on real hardware.
+	s, runner, _ := newTestServer(t)
+	ctx := context.Background()
+
+	runner.OnRun = func(c system.RecordedCommand) ([]byte, error) {
+		switch {
+		case len(c.Args) > 0 && c.Args[len(c.Args)-1] == "--active":
+			// A real wireless connection to fall back to.
+			return []byte("netplan-wlan0-the_wifi:wlan0:802-11-wireless\n"), nil
+		// Only this network's profile fails to come up. `connection up` also
+		// raises the setup access point and performs the rollback, and both of
+		// those must keep working.
+		case len(c.Args) >= 3 && c.Args[0] == "connection" && c.Args[1] == "up" &&
+			c.Args[2] == "the_wifi":
+			return nil, errors.New("Error: 802-11-wireless-security.key-mgmt: property is missing.")
+		default:
+			// Everything else, `connection up <previous>` included, succeeds.
+			return nil, nil
+		}
+	}
+
+	if err := s.EnterSetup(ctx); err != nil {
+		t.Fatalf("EnterSetup: %v", err)
+	}
+	if s.Status(ctx).Mode != ModeSetup {
+		t.Fatal("expected setup mode")
+	}
+
+	res, err := s.Connect(ctx, "the_wifi", "hunter2-valid-length", false)
+	if err == nil {
+		t.Fatal("expected the join to fail")
+	}
+	if !res.RolledBack {
+		t.Fatal("expected the rollback to succeed; this test covers that branch")
+	}
+	if mode := s.Status(ctx).Mode; mode != ModeNormal {
+		t.Errorf("mode after a failed join with a good rollback = %v, want %v", mode, ModeNormal)
+	}
 }

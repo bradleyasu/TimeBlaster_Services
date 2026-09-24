@@ -143,20 +143,60 @@ func ParseDeviceShow(out string) DeviceState {
 	return st
 }
 
-// ConnectArgs builds the command that joins a network.
+// Key management modes, as NetworkManager names them.
+const (
+	KeyMgmtOpen   = ""        // no security
+	KeyMgmtWPAPSK = "wpa-psk" // WPA/WPA2 personal, and WPA3 transitional
+	KeyMgmtSAE    = "sae"     // WPA3 personal only
+)
+
+// ConnectionNameFor is the profile name Timeblaster creates for a network.
 //
-// nmcli creates or updates a profile named after the SSID. Crucially, it does
-// not remove the profile for any other network: the previous known-good
-// credentials survive a failed attempt, which is what makes rollback possible.
-func ConnectArgs(iface, ssid, passphrase string, hidden bool) []string {
-	args := []string{"device", "wifi", "connect", ssid, "ifname", iface}
-	if passphrase != "" {
-		args = append(args, "password", passphrase)
+// Naming it after the SSID keeps it distinct from any profile the image shipped
+// with -- netplan, for instance, generates "netplan-wlan0-<ssid>" -- so a failed
+// attempt never destroys the credentials rollback depends on.
+func ConnectionNameFor(ssid string) string { return ssid }
+
+// ConnectCommands builds the sequence that joins a network.
+//
+// This deliberately does NOT use `nmcli device wifi connect`, which infers the
+// security type from the scan list. Coming straight out of access-point mode the
+// radio has no usable scan, so nmcli sees no security flags, attaches the
+// passphrase to a profile with no key management, and NetworkManager rejects
+// the result:
+//
+//	Error: 802-11-wireless-security.key-mgmt: property is missing.
+//
+// That is what happened on real hardware: every join from the captive portal
+// failed this way, and the device only looked healthy because the rollback
+// restored the previous profile. Stating the security explicitly removes the
+// dependency on scan state entirely.
+//
+// The first command deletes any profile of the same name; it is expected to
+// fail when there is none, and the caller must skip it when that name is the
+// network it intends to roll back to.
+func ConnectCommands(iface, ssid, passphrase string, hidden bool, keyMgmt string) [][]string {
+	name := ConnectionNameFor(ssid)
+
+	add := []string{
+		"connection", "add", "type", "wifi",
+		"con-name", name, "ifname", iface, "ssid", ssid,
+		"--", "connection.autoconnect", "yes",
 	}
 	if hidden {
-		args = append(args, "hidden", "yes")
+		add = append(add, "802-11-wireless.hidden", "yes")
 	}
-	return args
+	if keyMgmt != KeyMgmtOpen {
+		add = append(add,
+			"802-11-wireless-security.key-mgmt", keyMgmt,
+			"802-11-wireless-security.psk", passphrase)
+	}
+
+	return [][]string{
+		{"connection", "delete", name},
+		add,
+		{"connection", "up", name},
+	}
 }
 
 // APUpArgs builds the commands that raise the setup access point.

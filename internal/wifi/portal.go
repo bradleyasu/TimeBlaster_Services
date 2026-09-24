@@ -35,6 +35,11 @@ type Portal struct {
 	ops portalOps
 	log *slog.Logger
 
+	// port is always "80" in production: the captive-portal probe URLs phones
+	// use are only consulted on port 80, so the page cannot pop up by itself
+	// anywhere else. Tests override it, because binding 80 needs root.
+	port string
+
 	mu   sync.Mutex
 	srv  *http.Server
 	done chan struct{}
@@ -42,7 +47,7 @@ type Portal struct {
 
 // NewPortal creates the portal.
 func NewPortal(cfg config.WiFi, ops portalOps, log *slog.Logger) *Portal {
-	return &Portal{cfg: cfg, ops: ops, log: log}
+	return &Portal{cfg: cfg, ops: ops, log: log, port: "80"}
 }
 
 // Start begins serving. It binds port 80 on the setup address so that a phone
@@ -69,7 +74,11 @@ func (p *Portal) Start(ctx context.Context) error {
 		mux.HandleFunc(probe, p.handleCaptiveProbe)
 	}
 
-	addr := net.JoinHostPort(addressHost(p.cfg.SetupAddress), "80")
+	port := p.port
+	if port == "" {
+		port = "80"
+	}
+	addr := net.JoinHostPort(addressHost(p.cfg.SetupAddress), port)
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           securityHeaders(mux),
