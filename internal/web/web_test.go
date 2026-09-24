@@ -213,6 +213,7 @@ func (f *fakeAudio) Health() audio.Health {
 
 type fakeMedia struct {
 	mu        sync.Mutex
+	guide     ersatztv.XMLTV
 	channels  []ersatztv.Channel
 	current   *ersatztv.Channel
 	selectErr error
@@ -259,6 +260,14 @@ func (f *fakeMedia) Status() media.Status {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return media.Status{ErsatzTVReachable: true, ChannelCount: len(f.channels), PlayerAlive: true}
+}
+
+func (f *fakeMedia) Guide(_ context.Context, window time.Duration) (ersatztv.Guide, error) {
+	f.mu.Lock()
+	chs, x := f.channels, f.guide
+	f.mu.Unlock()
+	now := time.Now()
+	return ersatztv.MergeGuide(chs, x, now, now.Add(window)), nil
 }
 
 func (f *fakeMedia) RefreshSoon() {

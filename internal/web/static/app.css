@@ -19,7 +19,43 @@
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
-html, body { height: 100%; }
+/* The app hides things with the `hidden` attribute, so that attribute has to
+   win. The browser's own rule is `[hidden] { display: none }`, whose specificity
+   (0,1,0) merely ties with any class selector -- and on a tie the author
+   stylesheet beats the user agent. So a single `.sheet { display: flex }` was
+   enough to pin the New Alarm sheet permanently open, with its Cancel button
+   setting `hidden` to no visible effect. !important is the standard remedy for
+   exactly this collision. */
+[hidden] { display: none !important; }
+
+html, body {
+  height: 100%;
+  /* Zoom is what makes a web app feel like a web page. Three things are needed
+     because no single one covers every browser:
+
+     - user-scalable=no in the viewport meta handles Android and desktop, but
+       iOS Safari has deliberately ignored it since iOS 10 on accessibility
+       grounds, so on an iPhone it does nothing at all.
+     - touch-action: pan-x pan-y is what actually stops pinch on iOS. Allowing
+       only panning removes both pinch-zoom and double-tap-to-zoom while
+       leaving scrolling untouched. (touch-action: manipulation would NOT do:
+       it kills double-tap zoom but still permits pinch.)
+     - app.js refuses the iOS-only pinch gesture events, which older iOS
+       fires even when touch-action is set.
+
+     Full-screen from the home screen suppresses zoom anyway; this is for the
+     browser tab, where most of the use actually happens. */
+  touch-action: pan-x pan-y;
+  /* The long-press selection callout is the other unmistakable web-page tell.
+     Inputs and textareas opt back in below, because typing an alarm label
+     without being able to select text would be miserable. */
+  -webkit-user-select: none;
+  user-select: none;
+  /* Stops iOS inflating body text when the phone is turned to landscape, which
+     is another unmistakable "this is a web page" tell. */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
 
 body {
   margin: 0;
@@ -220,6 +256,9 @@ main { max-width: 640px; margin: 0 auto; padding: 0 14px 40px; }
 .health-row .value.down { color: var(--red); }
 .health-row .value.unknown { color: var(--muted); }
 .kv-row .value { color: var(--text); text-align: right; word-break: break-all; }
+/* Same amber the health rows use for "degraded": a page running older code
+   than the daemon is the app's own version of that. */
+.kv-row .value.degraded { color: var(--amber); font-weight: 700; }
 
 /* Toast ------------------------------------------------------------------ */
 
@@ -234,3 +273,58 @@ main { max-width: 640px; margin: 0 auto; padding: 0 14px 40px; }
   box-shadow: 0 8px 28px rgba(0, 0, 0, .6);
 }
 .toast.error { border-color: var(--red); color: #ffd4d4; }
+
+/* TV guide ----------------------------------------------------------------- */
+
+/* A channel picker rather than a grid. The channels have wildly different
+   programme densities -- a music-video channel runs a four-minute median
+   against half an hour for a painting channel -- so a time-column grid renders
+   most of one channel as unreadable, untappable slivers. */
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.chip {
+  padding: 9px 14px;
+  background: var(--panel); color: var(--muted);
+  border: 1px solid var(--edge); border-radius: 999px;
+  font: inherit; font-size: 13px; letter-spacing: .06em;
+  cursor: pointer; white-space: nowrap;
+}
+.chip.active { background: var(--green); color: #051405; border-color: var(--green); font-weight: 700; }
+
+.guide { display: flex; flex-direction: column; gap: 6px; }
+.guide-day {
+  position: sticky; top: 0; z-index: 1;
+  margin: 12px 0 4px;
+  padding: 6px 2px;
+  background: var(--bg);
+  color: var(--muted); font-size: 12px; letter-spacing: .18em;
+  border-bottom: 1px solid var(--edge);
+}
+.guide-day:first-child { margin-top: 0; }
+.guide-row {
+  display: flex; gap: 12px; align-items: baseline;
+  padding: 10px 12px;
+  background: var(--panel); border: 1px solid var(--edge); border-radius: 9px;
+  cursor: pointer;
+}
+.guide-row:active { background: var(--panel-2); }
+.guide-row.now { border-color: var(--green); background: var(--panel-2); }
+.guide-time {
+  flex: 0 0 auto; min-width: 4.5em;
+  color: var(--green-dim); font-variant-numeric: tabular-nums; font-size: 13px;
+}
+.guide-row.now .guide-time { color: var(--green); font-weight: 700; }
+.guide-body { min-width: 0; }
+.guide-title { color: var(--text); overflow-wrap: anywhere; }
+.guide-sub { color: var(--muted); font-size: 12px; margin-top: 2px; overflow-wrap: anywhere; }
+.guide-badge {
+  display: inline-block; margin-left: 8px; padding: 1px 7px;
+  background: var(--green); color: #051405;
+  border-radius: 999px; font-size: 10px; font-weight: 700; letter-spacing: .1em;
+  vertical-align: 1px;
+}
+
+/* Text the user actually types stays selectable. */
+input, textarea, [contenteditable] {
+  -webkit-user-select: text;
+  user-select: text;
+}

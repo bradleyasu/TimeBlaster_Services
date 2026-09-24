@@ -529,6 +529,32 @@ func (s *Server) handleWiFiScan(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"networks": nets})
 }
 
+// guideMaxHours bounds the window a client may ask for. ErsatzTV builds about
+// two days ahead, so anything beyond this returns the same thing more slowly.
+const guideMaxHours = 72
+
+func (s *Server) handleGuide(w http.ResponseWriter, r *http.Request) {
+	hours := 24
+	if v := strings.TrimSpace(r.URL.Query().Get("hours")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			writeError(w, http.StatusBadRequest, "hours must be a positive whole number")
+			return
+		}
+		hours = min(n, guideMaxHours)
+	}
+
+	ctx, cancel := reqContext(r, 30*time.Second)
+	defer cancel()
+
+	guide, err := s.deps.Media.Guide(ctx, time.Duration(hours)*time.Hour)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "could not read the guide", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, guide)
+}
+
 func (s *Server) handleEnterSetup(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := reqContext(r, 60*time.Second)
 	defer cancel()

@@ -21,6 +21,17 @@
   // the displayed time ticks locally but stays anchored to the device.
   var clockOffsetMs = 0;
   var editing = null;
+  // guideData is the last schedule fetched; guideChannel is the channel whose
+  // listing is on screen. Both are plain data -- nothing about the channel
+  // lineup is baked into this file.
+  var guideData = null;
+  var guideChannel = null;
+  // The daemon version this page first saw. The assets are compiled into the
+  // binary, so a different version later means the code has been redeployed and
+  // this page is stale. It is only a baseline from the first health response
+  // onwards -- a deploy before the System tab is ever opened cannot be spotted,
+  // which is why the button does not depend on it.
+  var loadedVersion = null;
 
   var DAY_NAMES = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
   var DAY_FULL = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -354,7 +365,121 @@
     });
   }
 
-  // --- Settings -----------------------------------------------------------
+  // --- TV guide -------------------------------------------------------------
+
+  // The guide is built entirely from what the server sends. Channels, their
+  // numbers and their names all arrive as data, so adding a channel in ErsatzTV
+  // makes it appear here with no change to this file.
+
+  function loadGuide(force) {
+    var list = $('guide-list');
+    if (force || !guideData) {
+      list.innerHTML = '<div class="empty">Loading the schedule\u2026</div>';
+    }
+    return api('GET', 'api/guide?hours=48')
+      .then(function (g) { guideData = g; renderGuide(); })
+      .catch(function (e) {
+        list.innerHTML = '';
+        var empty = document.createElement('div');
+        empty.className = 'empty';
+        empty.textContent = 'Could not load the guide: ' + e.message;
+        list.appendChild(empty);
+      });
+  }
+
+  function renderGuide() {
+    var chips = $('guide-channels');
+    var list = $('guide-list');
+    chips.innerHTML = '';
+    list.innerHTML = '';
+
+    var channels = (guideData && guideData.channels) || [];
+    if (!channels.length) {
+      $('guide-hint').textContent = '';
+      list.appendChild(emptyRow('ErsatzTV has no channels configured yet.'));
+      return;
+    }
+
+    // Default to whatever is on the television, so opening the guide answers
+    // "what am I watching" without a tap.
+    var current = state && state.media && state.media.current_channel;
+    var known = function (n) { return channels.some(function (c) { return c.number === n; }); };
+    if (!guideChannel || !known(guideChannel)) {
+      guideChannel = (current && known(current)) ? current : channels[0].number;
+    }
+
+    channels.forEach(function (c) {
+      var chip = document.createElement('button');
+      chip.className = 'chip' + (c.number === guideChannel ? ' active' : '');
+      chip.textContent = c.number + (c.name ? ' ' + c.name : '');
+      chip.addEventListener('click', function () { guideChannel = c.number; renderGuide(); });
+      chips.appendChild(chip);
+    });
+
+    var chan = channels.filter(function (c) { return c.number === guideChannel; })[0];
+    var progs = (chan && chan.programmes) || [];
+    if (!progs.length) {
+      $('guide-hint').textContent = '';
+      // A channel with no playout is still listed, with nothing scheduled.
+      // Saying so beats leaving it out and looking broken.
+      list.appendChild(emptyRow('Nothing is scheduled on this channel.'));
+      return;
+    }
+    $('guide-hint').textContent = progs.length + ' programmes \u00b7 tap one to tune this channel';
+
+    var nowMs = Date.now() + clockOffsetMs;
+    var lastDay = '';
+    var html = '';
+    progs.forEach(function (p) {
+      var start = new Date(p.start);
+      var stop = new Date(p.stop);
+      var day = dayLabel(start, nowMs);
+      if (day !== lastDay) {
+        html += '<div class="guide-day">' + escapeHTML(day) + '</div>';
+        lastDay = day;
+      }
+      var on = nowMs >= start.getTime() && nowMs < stop.getTime();
+      html += '<div class="guide-row' + (on ? ' now' : '') + '">' +
+        '<div class="guide-time">' + escapeHTML(timeLabel(start)) + '</div>' +
+        '<div class="guide-body">' +
+        '<div class="guide-title">' + escapeHTML(p.title || 'Untitled') +
+        (on ? '<span class="guide-badge">NOW</span>' : '') + '</div>' +
+        (p.subTitle ? '<div class="guide-sub">' + escapeHTML(p.subTitle) + '</div>' : '') +
+        '</div></div>';
+    });
+    list.innerHTML = html;
+
+    var onNow = list.querySelector('.guide-row.now');
+    if (onNow && onNow.scrollIntoView) onNow.scrollIntoView({ block: 'center' });
+  }
+
+  function emptyRow(text) {
+    var d = document.createElement('div');
+    d.className = 'empty';
+    d.textContent = text;
+    return d;
+  }
+
+  function timeLabel(d) {
+    var h = d.getHours(), m = d.getMinutes();
+    if (state && state.settings && state.settings.clock_24h) return pad(h) + ':' + pad(m);
+    var ampm = h >= 12 ? 'pm' : 'am';
+    var h12 = h % 12;
+    if (h12 === 0) h12 = 12;
+    return h12 + ':' + pad(m) + ampm;
+  }
+
+  function dayLabel(d, nowMs) {
+    var same = function (a, b) {
+      return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() &&
+        a.getDate() === b.getDate();
+    };
+    if (same(d, new Date(nowMs))) return 'TODAY';
+    if (same(d, new Date(nowMs + 86400000))) return 'TOMORROW';
+    return d.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' }).toUpperCase();
+  }
+
+  // --- Settings -------------------------------------------------------------
 
   function fillSoundSelect(sel, selected) {
     sel.innerHTML = '';
@@ -431,6 +556,63 @@
 
   // --- System -------------------------------------------------------------
 
+  function renderAppVersion(serverVersion) {
+    var kv = $('app-version');
+    kv.innerHTML = '';
+    var stale = loadedVersion !== null && serverVersion !== loadedVersion;
+
+    var rows = [['Running', serverVersion || '\u2014']];
+    if (stale) rows.push(['This page', loadedVersion]);
+
+    rows.forEach(function (pair) {
+      var row = document.createElement('div');
+      row.className = 'kv-row';
+      row.innerHTML = '<span class="name">' + escapeHTML(pair[0]) + '</span>' +
+        '<span class="value' + (stale ? ' degraded' : '') + '">' +
+        escapeHTML(String(pair[1])) + '</span>';
+      kv.appendChild(row);
+    });
+
+    // A label rather than an automatic reload: the user might be part-way
+    // through editing an alarm, and pulling the page out from under them to
+    // save a tap would be rude.
+    $('btn-refresh-app').textContent = stale ? 'REFRESH APP \u2014 UPDATE READY' : 'REFRESH APP';
+  }
+
+  // refreshApp reloads the companion app.
+  //
+  // Everything is served with Cache-Control: no-cache, so the browser
+  // revalidates and an ordinary reload already picks up new code. The service
+  // worker and Cache Storage are cleared first anyway: sw.js does not register
+  // over plain HTTP today, but it would the moment this is served over HTTPS,
+  // and a stale worker would then quietly serve the old app forever.
+  //
+  // location.reload(true) is deliberately not used -- the argument has been
+  // ignored by every current browser for years.
+  function refreshApp() {
+    var cleanup = Promise.resolve();
+
+    if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
+      cleanup = cleanup.then(function () {
+        return navigator.serviceWorker.getRegistrations().then(function (regs) {
+          return Promise.all(regs.map(function (r) { return r.unregister(); }));
+        });
+      }).catch(function () { /* nothing registered, or not permitted */ });
+    }
+
+    if (window.caches && caches.keys) {
+      cleanup = cleanup.then(function () {
+        return caches.keys().then(function (keys) {
+          return Promise.all(keys.map(function (k) { return caches.delete(k); }));
+        });
+      }).catch(function () { /* no Cache Storage to clear */ });
+    }
+
+    // Reload either way: failing to clear a cache that may not even exist must
+    // not leave the button doing nothing.
+    cleanup.then(function () { location.reload(); }, function () { location.reload(); });
+  }
+
   function renderSystem() {
     api('GET', 'api/health').then(function (h) {
       var el = $('health');
@@ -456,6 +638,9 @@
       up.innerHTML = '<span class="name">Uptime</span><span class="value">' +
         escapeHTML(h.uptime) + '</span>';
       el.appendChild(up);
+
+      if (loadedVersion === null) loadedVersion = h.version;
+      renderAppVersion(h.version);
     }).catch(function () { /* the system tab is best-effort */ });
 
     var wifi = (state && state.wifi) || {};
@@ -491,18 +676,44 @@
   // --- Wiring -------------------------------------------------------------
 
   function selectTab(name) {
-    ['alarms', 'tv', 'settings', 'system'].forEach(function (t) {
+    ['alarms', 'tv', 'guide', 'settings', 'system'].forEach(function (t) {
       $('tab-' + t).hidden = t !== name;
     });
     Array.prototype.forEach.call(document.querySelectorAll('.tab'), function (b) {
       b.classList.toggle('active', b.dataset.tab === name);
     });
     if (name === 'system') renderSystem();
+    // Fetched on first open rather than at start-up: it is a couple of days of
+    // scheduling and most sessions never look at it.
+    if (name === 'guide' && !guideData) loadGuide();
   }
 
   function wire() {
     Array.prototype.forEach.call(document.querySelectorAll('.tab'), function (b) {
       b.addEventListener('click', function () { selectTab(b.dataset.tab); });
+    });
+
+    $('btn-refresh-app').addEventListener('click', function () {
+      toast('Reloading\u2026');
+      refreshApp();
+    });
+
+    $('btn-refresh-guide').addEventListener('click', function () { loadGuide(true); });
+
+    // Delegated, and bound once here rather than inside renderGuide: that
+    // function re-runs on every channel chip, so binding there would stack a
+    // fresh listener each time and fire one request per past render.
+    //
+    // The listing shows a single channel at a time, so any row in it
+    // unambiguously means "tune this channel" -- you cannot tune to a
+    // programme that has not started, only to the channel carrying it.
+    $('guide-list').addEventListener('click', function (e) {
+      var row = e.target.closest ? e.target.closest('.guide-row') : null;
+      if (!row || !guideChannel) return;
+      var number = guideChannel;
+      api('POST', 'api/channels/select', { number: number })
+        .then(function () { toast('Channel ' + number); return refresh(); })
+        .catch(fail);
     });
 
     $('btn-add').addEventListener('click', function () { openEditor(null); });
@@ -554,8 +765,22 @@
     });
   }
 
+  // iOS fires these non-standard gesture events for pinch, and older versions
+  // honour them even where touch-action would otherwise have stopped it. They
+  // are the last of the three layers described in app.css.
+  function refuseZoomGestures() {
+    ['gesturestart', 'gesturechange', 'gestureend'].forEach(function (name) {
+      document.addEventListener(name, function (e) { e.preventDefault(); }, { passive: false });
+    });
+    // Double-tap zoom needs nothing here: a touch-action value that does not
+    // include zoom disables double-tap as well as pinch. Swallowing touchend
+    // to block it would also swallow the click that follows, so tapping two
+    // guide rows in quick succession would lose the second one.
+  }
+
   function start() {
     wire();
+    refuseZoomGestures();
     selectTab('alarms');
     refresh().then(loadSounds).then(loadSettings).then(loadAlarms);
     connect();

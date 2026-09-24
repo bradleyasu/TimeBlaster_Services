@@ -57,6 +57,8 @@ type AudioService interface {
 // MediaService is the television subsystem as the API sees it.
 type MediaService interface {
 	Channels() []ersatztv.Channel
+	// Guide returns the lineup paired with its schedule for the given window.
+	Guide(ctx context.Context, window time.Duration) (ersatztv.Guide, error)
 	Current() *ersatztv.Channel
 	SelectNumber(ctx context.Context, number string) error
 	ShowNoChannel(ctx context.Context) error
@@ -190,6 +192,7 @@ func (s *Server) routes() (http.Handler, error) {
 
 	// Networking. These proxy to the privileged helper; the daemon itself can do
 	// none of it.
+	mux.HandleFunc("GET /api/guide", s.handleGuide)
 	mux.HandleFunc("GET /api/wifi/status", s.handleWiFiStatus)
 	mux.HandleFunc("GET /api/wifi/networks", s.handleWiFiScan)
 	mux.HandleFunc("POST /api/wifi/setup", s.handleEnterSetup)
