@@ -22,9 +22,18 @@ CMDS     := timeblasterd timeblaster-wifi tbctl
 PI_GOOS   := linux
 PI_GOARCH := arm64
 
-# Override to deploy somewhere else: make deploy PI=pi@bedroom.local
-PI ?= timeblaster.local
-PI_USER ?= $(shell whoami)
+# Override to deploy somewhere else: make deploy PI=bedroom.local PI_USER=pi
+#
+# PI_KEY names an SSH identity when the Pi does not use your default key:
+#   make deploy PI_USER=joctv PI_KEY=~/.ssh/timeblaster
+#
+# Targets that need root on the Pi run over `ssh -t`, so sudo can prompt for a
+# password. Passwordless sudo is not assumed.
+PI       ?= timeblaster.local
+PI_USER  ?= $(shell whoami)
+PI_KEY   ?=
+SSH_OPTS := $(if $(PI_KEY),-i $(PI_KEY),)
+PI_SSH   := $(PI_USER)@$(PI)
 
 .PHONY: help
 help: ## Show this help
@@ -169,43 +178,43 @@ install: ## Install on THIS machine (run on the Pi, as root)
 
 .PHONY: deploy
 deploy: build-pi ## Cross-compile and copy the binaries to the Pi over SSH
-	@printf 'Deploying $(VERSION) to $(PI)\n'
-	scp $(BIN_DIR)/$(PI_GOOS)-$(PI_GOARCH)/* $(PI):/tmp/
-	ssh $(PI) 'sudo install -m 0755 /tmp/timeblasterd /tmp/timeblaster-wifi /tmp/tbctl /usr/local/bin/ && \
+	@printf 'Deploying $(VERSION) to $(PI_SSH)\n'
+	scp $(SSH_OPTS) $(BIN_DIR)/$(PI_GOOS)-$(PI_GOARCH)/* $(PI_SSH):/tmp/
+	ssh -t $(SSH_OPTS) $(PI_SSH) 'sudo install -m 0755 /tmp/timeblasterd /tmp/timeblaster-wifi /tmp/tbctl /usr/local/bin/ && \
 	           rm -f /tmp/timeblasterd /tmp/timeblaster-wifi /tmp/tbctl && \
 	           sudo systemctl restart timeblaster-wifi.service timeblaster.service'
 	@printf 'Deployed. Check with: make logs\n'
 
 .PHONY: restart
 restart: ## Restart the services on the Pi
-	ssh $(PI) 'sudo systemctl restart timeblaster-wifi.service timeblaster.service'
-	@ssh $(PI) 'systemctl is-active timeblaster.service timeblaster-wifi.service' || true
+	ssh -t $(SSH_OPTS) $(PI_SSH) 'sudo systemctl restart timeblaster-wifi.service timeblaster.service'
+	@ssh $(SSH_OPTS) $(PI_SSH) 'systemctl is-active timeblaster.service timeblaster-wifi.service' || true
 
 .PHONY: stop
 stop: ## Stop the services on the Pi
-	ssh $(PI) 'sudo systemctl stop timeblaster.service timeblaster-wifi.service'
+	ssh -t $(SSH_OPTS) $(PI_SSH) 'sudo systemctl stop timeblaster.service timeblaster-wifi.service'
 
 .PHONY: status
 status: ## Show service status on the Pi
-	ssh $(PI) 'systemctl status --no-pager timeblaster.service timeblaster-wifi.service ersatztv.service' || true
+	ssh $(SSH_OPTS) $(PI_SSH) 'systemctl status --no-pager timeblaster.service timeblaster-wifi.service ersatztv.service' || true
 
 .PHONY: logs
 logs: ## Follow the daemon log on the Pi
-	ssh $(PI) 'journalctl -u timeblaster.service -f --no-pager'
+	ssh $(SSH_OPTS) $(PI_SSH) 'journalctl -u timeblaster.service -f --no-pager'
 
 .PHONY: logs-all
 logs-all: ## Follow every Timeblaster-related log on the Pi
-	ssh $(PI) 'journalctl -u timeblaster.service -u timeblaster-wifi.service -u ersatztv.service -f --no-pager'
+	ssh $(SSH_OPTS) $(PI_SSH) 'journalctl -u timeblaster.service -u timeblaster-wifi.service -u ersatztv.service -f --no-pager'
 
 .PHONY: logs-debug
 logs-debug: ## Restart the daemon at debug level and follow its log
-	ssh $(PI) 'sudo systemctl stop timeblaster.service && \
+	ssh -t $(SSH_OPTS) $(PI_SSH) 'sudo systemctl stop timeblaster.service && \
 	           sudo -u timeblaster /usr/local/bin/timeblasterd \
 	             --config /etc/timeblaster/timeblaster.toml --log-level debug --log-time'
 
 .PHONY: health
 health: ## Query the health endpoint on the Pi
-	ssh $(PI) 'tbctl health'
+	ssh $(SSH_OPTS) $(PI_SSH) 'tbctl health'
 
 # --- Firmware ---------------------------------------------------------------
 
