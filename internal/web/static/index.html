@@ -134,9 +134,13 @@
     <h2 id="editor-title">NEW ALARM</h2>
 
     <div class="time-row">
-      <input type="number" id="ed-hour" min="0" max="23" inputmode="numeric">
+      <input type="number" id="ed-hour" min="1" max="12" inputmode="numeric">
       <span>:</span>
       <input type="number" id="ed-minute" min="0" max="59" inputmode="numeric">
+      <div class="meridiem" id="ed-meridiem">
+        <button type="button" class="day" data-m="am">AM</button>
+        <button type="button" class="day" data-m="pm">PM</button>
+      </div>
     </div>
 
     <label class="field">

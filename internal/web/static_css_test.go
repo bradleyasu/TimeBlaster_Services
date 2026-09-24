@@ -89,3 +89,33 @@ func TestEditorSheetIsHiddenInTheMarkup(t *testing.T) {
 		t.Errorf("the alarm editor must start hidden, got: %s", tag)
 	}
 }
+
+func TestAppJSDoesNotReadStateKeysTheServerNeverSends(t *testing.T) {
+	// The TV guide formatted its times from state.settings.clock_24h. The state
+	// document has no "settings" key at all -- the preference lives under
+	// state.clock -- so the guide silently ignored 24-hour mode. Nothing throws
+	// on a missing key in JavaScript; it just quietly does the wrong thing,
+	// which is why this is worth pinning rather than leaving to review.
+	js := readStatic(t, "app.js")
+	for _, absent := range []string{"state.settings"} {
+		if strings.Contains(js, absent) {
+			t.Errorf("app.js reads %q, which /api/state does not provide", absent)
+		}
+	}
+}
+
+func TestAlarmEditorHasAMeridiemControl(t *testing.T) {
+	// The alarm model stores hours as 0-23. Without this control a user in
+	// 12-hour mode had to know that 7pm is 19, which the rest of the app never
+	// asks of them.
+	html := readStatic(t, "index.html")
+	if !strings.Contains(html, `id="ed-meridiem"`) {
+		t.Error("the alarm editor has no AM/PM control")
+	}
+	js := readStatic(t, "app.js")
+	for _, fn := range []string{"function setEditorTime", "function editorHour24"} {
+		if !strings.Contains(js, fn) {
+			t.Errorf("app.js is missing %s, so the editor cannot convert between forms", fn)
+		}
+	}
+}

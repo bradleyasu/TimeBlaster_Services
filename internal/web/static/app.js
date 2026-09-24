@@ -262,11 +262,56 @@
     }).catch(fail);
   }
 
+  // The alarm model stores an hour of 0-23 whatever the user's preference. The
+  // editor shows whichever form matches the setting and converts at the edges,
+  // so the two never disagree about what "7" means.
+  function editorUses24h() {
+    return !!(state && state.clock && state.clock.clock_24h);
+  }
+
+  function setEditorTime(hour24, minute) {
+    var hourEl = $('ed-hour');
+    var mer = $('ed-meridiem');
+    $('ed-minute').value = pad(minute);
+
+    if (editorUses24h()) {
+      mer.hidden = true;
+      hourEl.min = 0;
+      hourEl.max = 23;
+      hourEl.value = pad(hour24);
+      return;
+    }
+
+    mer.hidden = false;
+    hourEl.min = 1;
+    hourEl.max = 12;
+    hourEl.value = hour24 % 12 || 12;   // midnight and noon both show as 12
+    var pm = hour24 >= 12;
+    Array.prototype.forEach.call(mer.children, function (b) {
+      b.classList.toggle('on', (b.dataset.m === 'pm') === pm);
+    });
+  }
+
+  function editorHour24() {
+    var raw = parseInt($('ed-hour').value, 10);
+    if (isNaN(raw)) raw = 0;
+
+    if (editorUses24h()) {
+      return Math.min(Math.max(raw, 0), 23);
+    }
+
+    // 12 AM is hour 0 and 12 PM is hour 12, so the modulo has to come before
+    // the twelve-hour shift rather than after it.
+    var h = Math.min(Math.max(raw, 1), 12) % 12;
+    var chosen = $('ed-meridiem').querySelector('.day.on');
+    if (chosen && chosen.dataset.m === 'pm') h += 12;
+    return h;
+  }
+
   function openEditor(a) {
     editing = a || null;
     $('editor-title').textContent = a ? 'EDIT ALARM' : 'NEW ALARM';
-    $('ed-hour').value = a ? a.hour : 7;
-    $('ed-minute').value = a ? pad(a.minute) : '00';
+    setEditorTime(a ? a.hour : 7, a ? a.minute : 0);
     $('ed-label').value = a ? (a.label || '') : '';
     $('ed-snooze').value = a ? a.snooze_minutes : 9;
     $('ed-snooze-value').textContent = $('ed-snooze').value;
@@ -300,7 +345,7 @@
     });
 
     var body = {
-      hour: parseInt($('ed-hour').value, 10) || 0,
+      hour: editorHour24(),
       minute: parseInt($('ed-minute').value, 10) || 0,
       label: $('ed-label').value,
       repeat_days: mask,
@@ -440,7 +485,7 @@
       }
       var on = nowMs >= start.getTime() && nowMs < stop.getTime();
       html += '<div class="guide-row' + (on ? ' now' : '') + '">' +
-        '<div class="guide-time">' + escapeHTML(timeLabel(start)) + '</div>' +
+        '<div class="guide-time">' + escapeHTML(formatTime(start)) + '</div>' +
         '<div class="guide-body">' +
         '<div class="guide-title">' + escapeHTML(p.title || 'Untitled') +
         (on ? '<span class="guide-badge">NOW</span>' : '') + '</div>' +
@@ -458,15 +503,6 @@
     d.className = 'empty';
     d.textContent = text;
     return d;
-  }
-
-  function timeLabel(d) {
-    var h = d.getHours(), m = d.getMinutes();
-    if (state && state.settings && state.settings.clock_24h) return pad(h) + ':' + pad(m);
-    var ampm = h >= 12 ? 'pm' : 'am';
-    var h12 = h % 12;
-    if (h12 === 0) h12 = 12;
-    return h12 + ':' + pad(m) + ampm;
   }
 
   function dayLabel(d, nowMs) {
@@ -499,7 +535,10 @@
   function loadSounds() {
     return api('GET', 'api/sounds').then(function (d) {
       sounds = (d && d.sounds) || [];
-      fillSoundSelect($('set-sound'), state && state.settings_default_sound);
+      // Keep whatever is already chosen. loadSettings owns which sound is the
+      // default and fills this from /api/settings; guessing from a state key
+      // that does not exist only risked disagreeing with it.
+      fillSoundSelect($('set-sound'), $('set-sound').value);
 
       var list = $('sound-list');
       list.innerHTML = '';
@@ -717,6 +756,16 @@
     });
 
     $('btn-add').addEventListener('click', function () { openEditor(null); });
+    // Mutually exclusive, like a radio pair: tapping one always leaves exactly
+    // one selected, so editorHour24 never has to guess.
+    Array.prototype.forEach.call($('ed-meridiem').children, function (b) {
+      b.addEventListener('click', function () {
+        Array.prototype.forEach.call($('ed-meridiem').children, function (o) {
+          o.classList.toggle('on', o === b);
+        });
+      });
+    });
+
     $('ed-save').addEventListener('click', saveAlarm);
     $('ed-cancel').addEventListener('click', closeEditor);
     $('ed-delete').addEventListener('click', deleteAlarm);
