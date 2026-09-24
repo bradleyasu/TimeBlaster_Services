@@ -32,6 +32,8 @@ PI_GOARCH := arm64
 PI       ?= timeblaster.local
 PI_USER  ?= $(shell whoami)
 PI_KEY   ?=
+# Where the repository is checked out on the Pi, for `make deploy-git`.
+PI_CHECKOUT ?= ~/timeblaster
 SSH_OPTS := $(if $(PI_KEY),-i $(PI_KEY),)
 PI_SSH   := $(PI_USER)@$(PI)
 
@@ -184,6 +186,24 @@ deploy: build-pi ## Cross-compile and copy the binaries to the Pi over SSH
 	           rm -f /tmp/timeblasterd /tmp/timeblaster-wifi /tmp/tbctl && \
 	           sudo systemctl restart timeblaster-wifi.service timeblaster.service'
 	@printf 'Deployed. Check with: make logs\n'
+
+.PHONY: update
+update: ## Pull and deploy on THIS machine (run on the Pi)
+	@if [ ! -d .git ]; then printf 'Not a git checkout.\n'; exit 1; fi
+	@printf 'Updating from %s\n' "$$(git remote get-url origin)"
+	@if [ -n "$$(git status --porcelain)" ]; then 		printf '\nThe working tree has local changes. Commit or discard them first:\n\n'; 		git status --short; 		printf '\n'; exit 1; 	fi
+	git pull --ff-only
+	@$(MAKE) --no-print-directory build
+	sudo install -m 0755 $(BIN_DIR)/timeblasterd $(BIN_DIR)/timeblaster-wifi $(BIN_DIR)/tbctl /usr/local/bin/
+	sudo systemctl restart timeblaster-wifi.service timeblaster.service
+	@sleep 4
+	@printf '\nNow running %s\n' "$$(tbctl version 2>/dev/null || echo '?')"
+	@systemctl is-active timeblaster.service timeblaster-wifi.service
+
+.PHONY: deploy-git
+deploy-git: ## Tell the Pi to pull and deploy itself (run from a dev machine)
+	@printf 'Asking %s to update from git\n' "$(PI_SSH)"
+	ssh -t $(SSH_OPTS) $(PI_SSH) 'cd $(PI_CHECKOUT) && make update'
 
 .PHONY: restart
 restart: ## Restart the services on the Pi
