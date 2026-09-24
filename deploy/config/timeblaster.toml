@@ -42,6 +42,16 @@ display_on = true
 # reading from the Nano selects the right channel within a second anyway.
 restore_channel_on_boot = false
 
+# How long the 7-segment display shows the channel number after a channel
+# change, the way a television does, before falling back to the clock.
+#
+# The display has four cells and the firmware binds a "." to the character
+# before it rather than spending a cell on it, so "Ch.02" fits exactly. Channel
+# numbers wider than two digits are shown bare and scroll.
+#
+# Set to "0s" to leave the clock up through channel changes.
+channel_banner_duration = "2s"
+
 [logging]
 # debug, info, warn, error.
 level = "info"
@@ -75,6 +85,21 @@ baud_rate = 115200
 reconnect_min_backoff = "500ms"
 reconnect_max_backoff = "15s"
 read_timeout = "2s"
+# Hold the clock's loading animation until the Pi's time is actually known.
+#
+# A Pi 5 with no coin cell on its RTC connector boots knowing nothing -- the
+# kernel log reads "setting system clock to 1970-01-01". systemd-timesyncd will
+# not leave it there, so it winds the clock forward to roughly when the Pi was
+# last powered. That time looks completely plausible and is a day wrong, and it
+# reaches the display about thirty seconds before NTP corrects it.
+#
+# With this on, the Nano keeps animating until the time is real. Turn it off for
+# an installation that deliberately runs with no time server, where the clock
+# would otherwise never appear at all -- or fit an RTC battery, which makes the
+# time correct at boot with or without a network.
+wait_for_time_sync = true
+
+
 
 # How often the Pi pushes the time to the Nano. The Nano free-runs its display
 # between syncs, so this can be generous; sending the time every second would be
@@ -280,10 +305,49 @@ channel_overlay_margin_y = 48
 # Black border thickness, which keeps green text readable over bright video.
 channel_overlay_outline = 3
 
+# The full-screen "tuning" card shown while a channel is coming up.
+#
+# ErsatzTV has to cold-start a transcode for any channel it is not already
+# streaming -- measured at around nine seconds on a Pi 5, nearly all of it spent
+# encoding the first HLS segment. Meanwhile mpv holds the outgoing channel's
+# last frame until the new one decodes, so without the card the wait looks
+# exactly like a frozen picture rather than like something in progress.
+#
+# Turning this off falls back to the small corner banner alone, which still
+# holds until the picture arrives.
+channel_overlay_tuning_enabled = true
+
+# The word shown beneath the channel number while waiting.
+channel_overlay_tuning_text = "TUNING"
+
+# How often the animated dots advance. The dot row is a fixed width and animates
+# by transparency, so the centred text does not jitter as it cycles.
+channel_overlay_tuning_interval = "400ms"
+
+# Glyph height of the tuning line, in the same resolution-independent units as
+# channel_overlay_font_size. 0 means half the banner font size.
+channel_overlay_tuning_font_size = 44
+
+# Colour painted over the whole screen behind the tuning card.
+#
+# mpv keeps the outgoing channel's last frame on screen until the new one
+# decodes, so without this the card sits on a frozen picture, which looks like
+# the player has crashed. Painting it out looks like having left the channel,
+# which is what actually happened. Set to "" to leave the frozen frame visible.
+channel_overlay_tuning_background = "#000000"
+
 [web]
-# host:port. Port 80 works because the unit grants CAP_NET_BIND_SERVICE, but 8080
-# is the default so the daemon needs no capability at all in the common case.
-# If you change the port, update deploy/avahi/timeblaster.service to match.
+# host:port.
+#
+# Leave this on 8080. The unit does grant CAP_NET_BIND_SERVICE, so the daemon
+# CAN bind port 80 -- but it binds the wildcard address, and the Wi-Fi setup
+# captive portal needs to bind 10.42.0.1:80 specifically. A wildcard listener on
+# :80 makes that fail with EADDRINUSE, and the result is an access point with no
+# portal behind it: the Pi leaves your network and cannot be configured until
+# the setup timeout expires.
+#
+# setup.sh rewrites the Avahi service record to match whatever port is set here,
+# so there is nothing else to keep in sync.
 listen_address = ":8080"
 
 read_timeout = "15s"

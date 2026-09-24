@@ -74,6 +74,9 @@ type General struct {
 	// one in the companion app.
 	Timezone string `toml:"timezone"`
 	// Clock24h selects 24-hour time on the 7-segment display and in the UI.
+	//
+	// The display formats the time itself from a unix timestamp, so this is
+	// pushed to the Nano over CONFIG and re-sent on every reconnect.
 	Clock24h bool `toml:"clock_24h"`
 	// DisplayOn turns the 7-segment display on or off.
 	//
@@ -88,6 +91,11 @@ type General struct {
 	// physical position is the truth, and the first reading from the Nano will
 	// select the right channel within a second anyway.
 	RestoreChannelOnBoot bool `toml:"restore_channel_on_boot"`
+	// ChannelBanner is how long the seven-segment display shows the channel
+	// number ("Ch.02") after a channel change before returning to the clock.
+	//
+	// Zero turns the banner off and leaves the clock up throughout.
+	ChannelBanner Duration `toml:"channel_banner_duration"`
 }
 
 // Logging controls journald output.
@@ -129,6 +137,18 @@ type Serial struct {
 	ReconnectMaxBackoff Duration `toml:"reconnect_max_backoff"`
 	// ReadTimeout bounds a single read so a wedged port is noticed.
 	ReadTimeout Duration `toml:"read_timeout"`
+	// WaitForTimeSync holds the Nano's loading animation until the Pi's clock
+	// has been set from a time server.
+	//
+	// A Pi 5 with no coin cell on its RTC connector boots knowing nothing, and
+	// systemd-timesyncd winds the clock forward to roughly when the Pi was last
+	// powered rather than leave it in 1970. That stale time looks completely
+	// plausible, so without this the display shows yesterday's time for the
+	// half-minute until NTP corrects it.
+	//
+	// Turn it off for an installation that deliberately runs with no time
+	// server, where the clock would otherwise never appear at all.
+	WaitForTimeSync bool `toml:"wait_for_time_sync"`
 	// TimeSyncInterval is how often the Pi pushes the current time to the Nano.
 	// The Nano free-runs its display between syncs, so this can be generous.
 	TimeSyncInterval Duration `toml:"time_sync_interval"`
@@ -286,6 +306,31 @@ type Overlay struct {
 	// Outline is the border thickness that keeps the text readable over bright
 	// video.
 	Outline int `toml:"channel_overlay_outline"`
+	// Tuning turns on the full-screen card shown while a channel is coming up.
+	//
+	// ErsatzTV has to cold-start a transcode for any channel it is not already
+	// streaming — measured at around nine seconds on a Pi 5, nearly all of it
+	// spent encoding the first HLS segment. Meanwhile mpv holds the outgoing
+	// channel's last frame on screen until the new one decodes, so the wait
+	// looks exactly like a picture that has frozen; when there is no frame to
+	// hold, as after a stream dies, it is black instead. Neither says anything
+	// is happening, which is what the card is for.
+	Tuning bool `toml:"channel_overlay_tuning_enabled"`
+	// TuningText is the word shown beneath the channel number while waiting.
+	TuningText string `toml:"channel_overlay_tuning_text"`
+	// TuningInterval is how often the animated dots advance.
+	TuningInterval Duration `toml:"channel_overlay_tuning_interval"`
+	// TuningFontSize is the glyph height of the tuning line. It defaults to half
+	// the banner font size, which keeps the channel number dominant.
+	TuningFontSize int `toml:"channel_overlay_tuning_font_size"`
+	// TuningBackground is the colour painted over the whole screen behind the
+	// tuning card.
+	//
+	// mpv holds the outgoing channel's last frame until the new one decodes, so
+	// without this the card sits on a frozen picture — which reads as a crash.
+	// Painting over it reads as having left the channel, which is what actually
+	// happened. Empty leaves the frozen frame showing.
+	TuningBackground string `toml:"channel_overlay_tuning_background"`
 }
 
 // Web configures the companion app's HTTP server.
@@ -345,6 +390,7 @@ func Default() Config {
 			Clock24h:             false,
 			DisplayOn:            true,
 			RestoreChannelOnBoot: false,
+			ChannelBanner:        Dur(2 * time.Second),
 		},
 		Logging: Logging{
 			Level:  "info",
@@ -366,6 +412,7 @@ func Default() Config {
 			ReconnectMinBackoff: Dur(500 * time.Millisecond),
 			ReconnectMaxBackoff: Dur(15 * time.Second),
 			ReadTimeout:         Dur(2 * time.Second),
+			WaitForTimeSync:     true,
 			TimeSyncInterval:    Dur(60 * time.Second),
 			HeartbeatTimeout:    Dur(8 * time.Second),
 			WriteQueueSize:      64,
@@ -454,6 +501,12 @@ func Default() Config {
 			MarginX:    64,
 			MarginY:    48,
 			Outline:    3,
+
+			Tuning:           true,
+			TuningText:       "TUNING",
+			TuningInterval:   Dur(400 * time.Millisecond),
+			TuningFontSize:   44,
+			TuningBackground: "#000000",
 		},
 		Web: Web{
 			ListenAddress:         ":8080",
@@ -658,6 +711,19 @@ func (c Config) Validate() error {
 		}
 		if _, _, _, err := ParseHexColor(c.Overlay.Color); err != nil {
 			add("overlay.channel_overlay_color: %v", err)
+		}
+		if c.Overlay.Tuning {
+			if c.Overlay.TuningInterval.Duration <= 0 {
+				add("overlay.channel_overlay_tuning_interval must be positive when the tuning card is enabled, got %s", c.Overlay.TuningInterval.Duration)
+			}
+			if c.Overlay.TuningFontSize < 0 {
+				add("overlay.channel_overlay_tuning_font_size cannot be negative, got %d", c.Overlay.TuningFontSize)
+			}
+			if c.Overlay.TuningBackground != "" {
+				if _, _, _, err := ParseHexColor(c.Overlay.TuningBackground); err != nil {
+					add("overlay.channel_overlay_tuning_background: %v", err)
+				}
+			}
 		}
 		switch c.Overlay.Position {
 		case "top-left", "top-right", "bottom-left", "bottom-right", "center":

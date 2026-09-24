@@ -98,6 +98,56 @@ type Service struct {
 	lastErr      error
 
 	refreshNow chan struct{}
+
+	// guide caches the parsed XMLTV document. It is a few hundred kilobytes of
+	// XML describing two days of scheduling, so re-fetching it for every phone
+	// that opens the guide tab would be wasteful on a Pi already busy
+	// transcoding.
+	guideMu    sync.Mutex
+	guide      ersatztv.XMLTV
+	guideAt    time.Time
+	guideValid bool
+}
+
+// GuideTTL is how long a fetched schedule is reused. The guide changes only
+// when a playout is rebuilt, which is rare, so this is about protecting the Pi
+// rather than about freshness.
+const GuideTTL = 2 * time.Minute
+
+// Guide returns the channel lineup paired with its schedule for the window
+// starting now.
+//
+// The lineup comes from the cached channel list rather than the guide document:
+// XMLTV only publishes channels that have programmes, so a channel added but
+// not yet scheduled would otherwise vanish from the guide entirely.
+func (s *Service) Guide(ctx context.Context, window time.Duration) (ersatztv.Guide, error) {
+	if window <= 0 {
+		window = 24 * time.Hour
+	}
+
+	s.guideMu.Lock()
+	cached, at, valid := s.guide, s.guideAt, s.guideValid
+	s.guideMu.Unlock()
+
+	if !valid || s.clock.Since(at) > GuideTTL {
+		fetched, err := s.etv.Guide(ctx)
+		if err != nil {
+			if !valid {
+				return ersatztv.Guide{}, err
+			}
+			// Serve what we have rather than nothing: a stale listing beats an
+			// error page when ErsatzTV is briefly restarting.
+			s.log.Debug("guide refresh failed; serving the cached one", "error", err)
+		} else {
+			cached = fetched
+			s.guideMu.Lock()
+			s.guide, s.guideAt, s.guideValid = fetched, s.clock.Now(), true
+			s.guideMu.Unlock()
+		}
+	}
+
+	now := s.clock.Now()
+	return ersatztv.MergeGuide(s.Channels(), cached, now, now.Add(window)), nil
 }
 
 // NewService builds the media service.
@@ -332,7 +382,31 @@ func (s *Service) SelectChannel(ctx context.Context, ch ersatztv.Channel) error 
 	url := s.etv.StreamURL(ch)
 	s.log.Info("channel change", "number", ch.Number, "name", ch.Name, "url", url)
 
+	// The overlay goes up before the load, not after it.
+	//
+	// ErsatzTV needs several seconds to cold-start a channel it is not already
+	// streaming, and mpv holds the outgoing channel's last frame until the new
+	// one decodes — so the wait looks like the picture has frozen. Drawing
+	// afterwards meant the card only landed on a screen that had already been
+	// sitting still for a while. Drawing first puts it up before the old
+	// picture stops moving.
+	//
+	// The overlay is cosmetic: a failure must not turn a successful channel
+	// change into an error.
+	if s.overlay != nil {
+		if err := s.overlay.ShowChannel(ctx, ch.Number, ch.Name); err != nil {
+			s.log.Debug("could not draw the channel overlay", "error", err)
+		}
+	}
+
 	if err := s.player.LoadFile(ctx, url); err != nil {
+		// The card promised a channel that is not coming. Take it down rather
+		// than leave it up until the safety-net hold expires.
+		if s.overlay != nil {
+			if herr := s.overlay.Hide(ctx); herr != nil {
+				s.log.Debug("could not hide the channel overlay", "error", herr)
+			}
+		}
 		s.mu.Lock()
 		s.lastErr = err
 		s.mu.Unlock()
@@ -348,13 +422,6 @@ func (s *Service) SelectChannel(ctx context.Context, ch ersatztv.Channel) error 
 	obs := s.observer
 	s.mu.Unlock()
 
-	// The overlay is cosmetic: a failure must not turn a successful channel
-	// change into an error.
-	if s.overlay != nil {
-		if err := s.overlay.ShowChannel(ctx, ch.Number, ch.Name); err != nil {
-			s.log.Debug("could not draw the channel overlay", "error", err)
-		}
-	}
 	if obs != nil {
 		cp := ch
 		obs.ChannelChanged(&cp)

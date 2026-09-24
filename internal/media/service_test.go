@@ -240,8 +240,34 @@ func TestSelectChannelLoadsTheStreamAndDrawsTheOverlay(t *testing.T) {
 	if len(overlays) != 1 {
 		t.Fatalf("overlay calls: %+v", overlays)
 	}
-	if data, _ := overlays[0].Args[3].(string); !strings.HasSuffix(data, "CH 3") {
-		t.Errorf("overlay text: %q", data)
+	// What goes up first is the tuning card, not the corner banner; the banner
+	// only replaces it once there is a picture to put it over.
+	data, _ := overlays[0].Args[3].(string)
+	for _, want := range []string{"CH 3", "TUNING"} {
+		if !strings.Contains(data, want) {
+			t.Errorf("tuning card is missing %q: %q", want, data)
+		}
+	}
+
+	// And it is drawn before the load, not after it. LoadFile blanks the screen
+	// the moment it lands while ErsatzTV can take seconds to cold-start the
+	// channel, so drawing second leaves the television black for the whole wait
+	// with nothing on it to say why.
+	drewAt, loadedAt := -1, -1
+	for i, c := range f.player.Calls() {
+		switch c.Name() {
+		case "osd-overlay":
+			if drewAt < 0 {
+				drewAt = i
+			}
+		case "loadfile":
+			if loadedAt < 0 {
+				loadedAt = i
+			}
+		}
+	}
+	if drewAt < 0 || loadedAt < 0 || drewAt > loadedAt {
+		t.Errorf("the overlay must be drawn before loadfile: overlay at %d, loadfile at %d", drewAt, loadedAt)
 	}
 }
 

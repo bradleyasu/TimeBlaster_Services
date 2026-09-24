@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bradsheets/timeblaster/internal/alarm"
@@ -80,6 +81,84 @@ type App struct {
 	// block the input path, so the work has to be asynchronous, and once it is
 	// asynchronous the only safe number of deciders is one.
 	screenReq chan int
+
+	// displayMu guards displayGen, the seven-segment display's claim counter.
+	//
+	// Anything that puts text on the display takes a new generation. A timed
+	// revert only fires if it still holds the latest one, so a banner that
+	// expires cannot wipe a message something else has put up in the meantime --
+	// a channel banner timing out must not erase "SETUP".
+	displayMu  sync.Mutex
+	displayGen uint64
+}
+
+// claimDisplay takes ownership of the seven-segment display and returns the
+// generation of the claim.
+func (a *App) claimDisplay() uint64 {
+	a.displayMu.Lock()
+	defer a.displayMu.Unlock()
+	a.displayGen++
+	return a.displayGen
+}
+
+// holdsDisplay reports whether gen is still the newest claim.
+func (a *App) holdsDisplay(gen uint64) bool {
+	a.displayMu.Lock()
+	defer a.displayMu.Unlock()
+	return a.displayGen == gen
+}
+
+// showNanoText puts text on the seven-segment display and leaves it there until
+// something else claims the display.
+func (a *App) showNanoText(text string) {
+	if a.nano == nil {
+		return
+	}
+	a.claimDisplay()
+	if err := a.nano.ShowText(text); err != nil {
+		a.log.Debug("could not put text on the display", "text", text, "error", err)
+	}
+}
+
+// showNanoClock returns the seven-segment display to the clock.
+func (a *App) showNanoClock() {
+	if a.nano == nil {
+		return
+	}
+	a.claimDisplay()
+	if err := a.nano.ShowClock(); err != nil {
+		a.log.Debug("could not return the display to the clock", "error", err)
+	}
+}
+
+// flashNanoText shows text for d and then returns the display to the clock.
+//
+// The revert is skipped if something else has claimed the display in the
+// meantime, so a channel banner expiring cannot clear a Wi-Fi setup message or
+// an error that arrived after it.
+func (a *App) flashNanoText(text string, d time.Duration) {
+	if a.nano == nil {
+		return
+	}
+	if d <= 0 {
+		return // the banner is turned off
+	}
+	gen := a.claimDisplay()
+	if err := a.nano.ShowText(text); err != nil {
+		a.log.Debug("could not put text on the display", "text", text, "error", err)
+		return
+	}
+	go func() {
+		timer := a.clock.NewTimer(d)
+		defer timer.Stop()
+		<-timer.C()
+		if !a.holdsDisplay(gen) {
+			return
+		}
+		if err := a.nano.ShowClock(); err != nil {
+			a.log.Debug("could not return the display to the clock", "error", err)
+		}
+	}()
 }
 
 // New assembles the application.
@@ -324,10 +403,18 @@ func (a *App) initHardware(deps Deps) {
 		ReconnectMax:     a.cfg.Serial.ReconnectMaxBackoff.Duration,
 		WriteQueueSize:   a.cfg.Serial.WriteQueueSize,
 		DisplayOn:        a.storedDisplayOn(),
+		Clock24h:         storage.GetBool(a.store, storage.KeyClock24h, a.cfg.General.Clock24h),
+	}
+	// Without this the Nano is handed whatever the Pi currently believes the
+	// time to be, which on a battery-less Pi 5 is yesterday's for the first
+	// half-minute after boot.
+	var clockSync system.ClockSync = system.AlwaysSynced{}
+	if a.cfg.Serial.WaitForTimeSync {
+		clockSync = system.TimesyncdMarker{}
 	}
 	a.link = hardware.NewLink(linkCfg, hardware.Deps{
 		Opener: opener, Clock: a.clock, Logger: a.log.With("component", "nano"),
-		Observer: a.router, Lifecycle: a,
+		Observer: a.router, Lifecycle: a, ClockSync: clockSync,
 	})
 	a.nano = a.link
 }
@@ -379,13 +466,15 @@ func (a *App) initMedia(deps Deps) error {
 }
 
 func (a *App) initWiFi(deps Deps) {
-	if deps.WiFi != nil {
-		a.wifi = deps.WiFi
-		return
+	m := deps.WiFi
+	if m == nil {
+		m = wifi.NewClient(a.cfg.WiFi.HelperSocket,
+			a.cfg.WiFi.ConnectTimeout.Duration+a.cfg.WiFi.ValidateTimeout.Duration+30*time.Second,
+			a.log.With("component", "wifi"))
 	}
-	a.wifi = wifi.NewClient(a.cfg.WiFi.HelperSocket,
-		a.cfg.WiFi.ConnectTimeout.Duration+a.cfg.WiFi.ValidateTimeout.Duration+30*time.Second,
-		a.log.With("component", "wifi"))
+	// Wrapped so that entering setup mode always announces itself on the
+	// hardware, whether the request came from the button or the companion app.
+	a.wifi = announcingWiFi{Manager: m, app: a}
 }
 
 func (a *App) initWeb() error {
@@ -620,6 +709,9 @@ func (unavailableMedia) Status() media.Status {
 }
 func (unavailableMedia) SelectNumber(context.Context, string) error {
 	return errors.New("the television subsystem is not configured")
+}
+func (unavailableMedia) Guide(context.Context, time.Duration) (ersatztv.Guide, error) {
+	return ersatztv.Guide{}, errors.New("the television subsystem is not configured")
 }
 
 // ensure the runtime directory exists early, since several subsystems write there.

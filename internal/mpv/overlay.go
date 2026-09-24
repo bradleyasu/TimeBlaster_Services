@@ -54,6 +54,11 @@ type OverlayRenderer struct {
 	// awaiting marks a channel banner that is waiting for the picture to
 	// arrive. Until it does, only the safety-net timer can clear it.
 	awaiting bool
+	// curNumber and curName are the channel the current banner is for, kept so
+	// the animation loop and PlaybackStarted can redraw without the caller
+	// having to hand them back.
+	curNumber string
+	curName   string
 }
 
 // NewOverlayRenderer builds a renderer.
@@ -80,17 +85,29 @@ func (o *OverlayRenderer) ShowChannel(ctx context.Context, number, name string) 
 		return nil
 	}
 
-	text := formatOverlayText(o.cfg.TextFormat, number, name)
-	if err := o.show(ctx, text); err != nil {
-		return err
-	}
-
+	// Claim the slot before drawing, so a Hide racing with this call cannot be
+	// undone by the draw that follows it.
 	o.mu.Lock()
 	o.generation++
 	gen := o.generation
 	o.awaiting = true
+	o.curNumber, o.curName = number, name
+	tuning := o.cfg.Tuning
 	o.mu.Unlock()
 
+	var err error
+	if tuning {
+		err = o.showRaw(ctx, o.ASSTuning(number, name, 0))
+	} else {
+		err = o.show(ctx, formatOverlayText(o.cfg.TextFormat, number, name))
+	}
+	if err != nil {
+		return err
+	}
+
+	if tuning {
+		go o.animate(gen)
+	}
 	go o.hideAfter(gen, o.maxHold())
 	return nil
 }
@@ -107,12 +124,30 @@ func (o *OverlayRenderer) PlaybackStarted() {
 		return
 	}
 	o.awaiting = false
-	// Invalidate the safety-net timer, then schedule the real one.
+	// Invalidate the safety-net timer and stop the animation, then schedule the
+	// real one.
 	o.generation++
 	gen := o.generation
+	number, name := o.curNumber, o.curName
+	tuning := o.cfg.Tuning
 	o.mu.Unlock()
 
-	go o.hideAfter(gen, o.cfg.Duration.Duration)
+	// Started here rather than inside the goroutine: the redraw below happens
+	// first and costs an IPC round trip, which would otherwise delay the timer.
+	timer := o.clock.NewTimer(o.cfg.Duration.Duration)
+	go func() {
+		// There is a picture to put a banner over now, so the full-screen
+		// tuning card gives way to the ordinary corner banner for its turn.
+		if tuning {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			err := o.show(ctx, formatOverlayText(o.cfg.TextFormat, number, name))
+			cancel()
+			if err != nil && o.log != nil {
+				o.log.Debug("could not draw the channel banner", "error", err)
+			}
+		}
+		o.hideOnTimer(gen, timer)
+	}()
 }
 
 // Awaiting reports whether a banner is holding for the picture.
@@ -127,6 +162,126 @@ func (o *OverlayRenderer) maxHold() time.Duration {
 		return d
 	}
 	return 20 * time.Second
+}
+
+// tuningDots is the width of the animated indicator, in glyphs.
+const tuningDots = 3
+
+// animate advances the tuning card's dots until the picture arrives, the banner
+// is superseded, or mpv stops accepting overlay commands.
+func (o *OverlayRenderer) animate(gen uint64) {
+	interval := o.tuningInterval()
+	for phase := 1; ; phase++ {
+		timer := o.clock.NewTimer(interval)
+		<-timer.C()
+		timer.Stop()
+
+		o.mu.Lock()
+		stale := o.generation != gen || !o.awaiting
+		number, name := o.curNumber, o.curName
+		o.mu.Unlock()
+		if stale {
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err := o.showRaw(ctx, o.ASSTuning(number, name, phase))
+		cancel()
+		if err != nil {
+			// mpv is gone or wedged. The safety-net hide still owns the slot,
+			// so there is nothing to clean up here.
+			if o.log != nil {
+				o.log.Debug("could not animate the tuning card", "error", err)
+			}
+			return
+		}
+	}
+}
+
+// ASSTuning renders the full-screen card shown while a channel comes up.
+//
+// It is deliberately not the corner banner. A cold tune leaves the outgoing
+// channel's last frame frozen on screen for several seconds — or black, if
+// there was no frame to hold — so a small mark in a corner is easy to miss and
+// easy to mistake for a stuck picture. The channel number is centred and large,
+// with an animated row of dots underneath saying the appliance is working
+// rather than wedged.
+//
+// The dot row is always tuningDots glyphs wide and animates by alpha alone.
+// Appending real dots would change the line's width every frame and make the
+// centred text jitter horizontally.
+//
+// Exported as a pure function for the same reason as ASS: the escaping and
+// override-tag rules belong in a test, not in squinting at a television.
+func (o *OverlayRenderer) ASSTuning(number, name string, phase int) string {
+	var b strings.Builder
+
+	// A filled rectangle covering the whole canvas, on its own event line so the
+	// card's text draws over it. mpv leaves the outgoing channel's last frame on
+	// screen until the new one decodes, and a frozen picture reads as a crash;
+	// painting it out reads as having left the channel, which is what actually
+	// happened.
+	if bg := o.cfg.TuningBackground; bg != "" {
+		b.WriteString("{\\an7\\pos(0,0)\\bord0\\shad0\\alpha&H00&")
+		b.WriteString("\\c" + assColorOr(bg, "&H000000&"))
+		b.WriteString("\\p1}")
+		b.WriteString(fmt.Sprintf("m 0 0 l %d 0 l %d %d l 0 %d",
+			OverlayResX, OverlayResX, OverlayResY, OverlayResY))
+		b.WriteString("{\\p0}\n")
+	}
+
+	b.WriteString("{\\an5")
+	b.WriteString(fmt.Sprintf("\\pos(%d,%d)", OverlayResX/2, OverlayResY/2))
+	b.WriteString(fmt.Sprintf("\\fs%d", o.cfg.FontSize))
+	b.WriteString("\\b1")
+	b.WriteString("\\c" + assColor(o.cfg.Color))
+	b.WriteString("\\3c&H000000&")
+	b.WriteString(fmt.Sprintf("\\bord%d", o.cfg.Outline))
+	b.WriteString("\\shad0")
+	b.WriteString("}")
+	b.WriteString(escapeASS(formatOverlayText(o.cfg.TextFormat, number, name)))
+
+	b.WriteString("\\N")
+	b.WriteString(fmt.Sprintf("{\\fs%d\\b0}", o.tuningFontSize()))
+	b.WriteString(escapeASS(o.tuningText()))
+
+	if phase < 0 {
+		phase = 0
+	}
+	lit := phase % (tuningDots + 1)
+	for i := 0; i < tuningDots; i++ {
+		if i < lit {
+			b.WriteString("{\\alpha&H00&}")
+		} else {
+			b.WriteString("{\\alpha&HFF&}")
+		}
+		b.WriteString(".")
+	}
+	return b.String()
+}
+
+func (o *OverlayRenderer) tuningText() string {
+	if o.cfg.TuningText != "" {
+		return o.cfg.TuningText
+	}
+	return "TUNING"
+}
+
+func (o *OverlayRenderer) tuningFontSize() int {
+	if o.cfg.TuningFontSize > 0 {
+		return o.cfg.TuningFontSize
+	}
+	if n := o.cfg.FontSize / 2; n > 0 {
+		return n
+	}
+	return 1
+}
+
+func (o *OverlayRenderer) tuningInterval() time.Duration {
+	if d := o.cfg.TuningInterval.Duration; d > 0 {
+		return d
+	}
+	return 400 * time.Millisecond
 }
 
 // ShowText displays arbitrary text with the configured styling. It backs status
@@ -151,7 +306,13 @@ func (o *OverlayRenderer) ShowText(ctx context.Context, text string, d time.Dura
 }
 
 func (o *OverlayRenderer) show(ctx context.Context, text string) error {
-	data := o.ASS(text)
+	return o.showRaw(ctx, o.ASS(text))
+}
+
+// showRaw puts already-rendered ASS into the overlay slot. The tuning card
+// builds a multi-line event with per-glyph overrides, so it cannot go through
+// ASS, which renders a single styled string.
+func (o *OverlayRenderer) showRaw(ctx context.Context, data string) error {
 	// osd-overlay: id, format, data, res_x, res_y, z, hidden, compute_bounds.
 	_, err := o.ctrl.Command(ctx, "osd-overlay", OverlayID, "ass-events", data,
 		OverlayResX, OverlayResY, 0, false, false)
@@ -189,7 +350,14 @@ func (o *OverlayRenderer) Visible() bool {
 }
 
 func (o *OverlayRenderer) hideAfter(gen uint64, d time.Duration) {
-	timer := o.clock.NewTimer(d)
+	o.hideOnTimer(gen, o.clock.NewTimer(d))
+}
+
+// hideOnTimer takes an already-running timer, so a caller with work to do first
+// can start the clock before doing it. Drawing costs an IPC round trip, and a
+// hide timer that only starts after the draw is one a fast channel change can
+// race past.
+func (o *OverlayRenderer) hideOnTimer(gen uint64, timer system.Timer) {
 	defer timer.Stop()
 	<-timer.C()
 
@@ -270,11 +438,18 @@ func alignCode(position string) int {
 // order, which is the single most common way to end up with a blue banner when
 // you asked for green.
 func assColor(hex string) string {
+	// Validation should have caught a bad colour; fall back to retro green
+	// rather than drawing nothing.
+	return assColorOr(hex, "&H33FF33&")
+}
+
+// assColorOr renders hex as an ASS &HBBGGRR& colour, using fallback if it will
+// not parse. The background takes black rather than the banner's green: a
+// colour typo should not turn the tuning card into a full-screen green wall.
+func assColorOr(hex, fallback string) string {
 	r, g, b, err := config.ParseHexColor(hex)
 	if err != nil {
-		// Validation should have caught this; fall back to retro green rather than
-		// drawing nothing.
-		return "&H33FF33&"
+		return fallback
 	}
 	return fmt.Sprintf("&H%02X%02X%02X&", b, g, r)
 }

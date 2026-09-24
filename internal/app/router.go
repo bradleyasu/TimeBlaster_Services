@@ -3,6 +3,9 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/bradsheets/timeblaster/internal/alarm"
@@ -117,36 +120,15 @@ func (a *App) handleWiFiButton(ev input.ButtonEvent) {
 	a.log.Warn("Wi-Fi button held; entering setup mode",
 		"held", ev.Held.Round(time.Millisecond), "ssid", a.cfg.WiFi.SetupSSID)
 
-	// Tell the user something is happening before the network goes away.
-	if a.nano != nil {
-		if err := a.nano.ShowText("SETUP"); err != nil {
-			a.log.Debug("could not update the display for setup mode", "error", err)
-		}
-		_ = a.nano.SetLED(protocol.LEDWiFi, true)
-	}
-	if a.overlay != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		if err := a.overlay.ShowText(ctx, "WI-FI SETUP", 10*time.Second); err != nil {
-			a.log.Debug("could not show the setup overlay", "error", err)
-		}
-		cancel()
-	}
-
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
 
+		// Telling the user something is happening -- SETUP on the display, the
+		// Wi-Fi LED, the notice on the television -- is the wrapper's job, so
+		// this path and the companion app's button behave identically.
 		if err := a.wifi.EnterSetupMode(ctx); err != nil {
 			a.log.Error("could not enter Wi-Fi setup mode", "error", err)
-			if a.nano != nil {
-				_ = a.nano.ShowText("ERR")
-				// Return to the clock shortly so the display is not stuck on an
-				// error nobody can clear.
-				time.AfterFunc(5*time.Second, func() {
-					_ = a.nano.ShowClock()
-					_ = a.nano.SetLED(protocol.LEDWiFi, false)
-				})
-			}
 			return
 		}
 		a.log.Warn("Wi-Fi setup mode active",
@@ -199,7 +181,7 @@ func (a *App) AlarmStopped(active alarm.Active, reason alarm.StopReason) {
 			a.log.Debug("could not tell the Nano the alarm ended", "error", err)
 		}
 		_ = a.nano.SetLED(protocol.LEDAlarm, false)
-		_ = a.nano.ShowClock()
+		a.showNanoClock()
 	}
 	a.publish(state.NewEvent(state.EventAlarmStopped, map[string]any{
 		"alarm_id": active.AlarmID, "reason": string(reason),
@@ -284,8 +266,24 @@ func (a *App) ChannelChanged(ch *ersatztv.Channel) {
 		if err := a.store.SetSetting(storage.KeyLastChannelNumber, ch.Number); err != nil {
 			a.log.Debug("could not record the last channel", "error", err)
 		}
+		// Flash the channel on the seven-segment display the way a television
+		// does, then let it fall back to the clock.
+		a.flashNanoText(nanoChannelText(ch.Number), a.cfg.General.ChannelBanner.Duration)
 	}
 	a.publish(state.NewEvent(state.EventChannelChanged, ch))
+}
+
+// nanoChannelText renders a channel number for the seven-segment display.
+//
+// The display has four cells, and the firmware binds a '.' to the character
+// before it rather than spending a cell on it, so "Ch.02" occupies exactly
+// four: C, h with its dot lit, 0, 2. A number too wide for that falls back to
+// the bare number, which the firmware scrolls rather than truncates.
+func nanoChannelText(number string) string {
+	if n, err := strconv.Atoi(strings.TrimSpace(number)); err == nil && n >= 0 && n <= 99 {
+		return fmt.Sprintf("Ch.%02d", n)
+	}
+	return strings.TrimSpace(number)
 }
 
 // publish broadcasts an event to connected companion apps.

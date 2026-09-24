@@ -109,6 +109,10 @@ func TestOverlayShowAndHideAfterThePicture(t *testing.T) {
 	clk := system.NewFakeClock(time.Now())
 	cfg := overlayConfig()
 	cfg.Duration = config.Dur(2 * time.Second)
+	// This test is about the hold-and-hide contract, and its arithmetic below
+	// counts registered timers. The tuning card animates on a timer of its own,
+	// which would throw that count off; the card has its own tests.
+	cfg.Tuning = false
 	r := NewOverlayRenderer(cfg, fake, clk, testLogger())
 
 	if err := r.ShowChannel(context.Background(), "3", "Movies 24/7"); err != nil {
@@ -162,6 +166,10 @@ func TestOverlayRapidChannelChangesDoNotClearTheLatestBanner(t *testing.T) {
 	fake := NewFake()
 	clk := system.NewFakeClock(time.Now())
 	cfg := overlayConfig()
+	// This test is about the hold-and-hide contract, and its arithmetic below
+	// counts registered timers. The tuning card animates on a timer of its own,
+	// which would throw that count off; the card has its own tests.
+	cfg.Tuning = false
 	cfg.Duration = config.Dur(2 * time.Second)
 	r := NewOverlayRenderer(cfg, fake, clk, testLogger())
 
@@ -290,6 +298,10 @@ func TestChannelBannerHoldsUntilThePictureArrives(t *testing.T) {
 	cfg := overlayConfig()
 	cfg.Duration = config.Dur(2 * time.Second)
 	cfg.MaxHold = config.Dur(20 * time.Second)
+	// This test is about the hold-and-hide contract, and its arithmetic below
+	// counts registered timers. The tuning card animates on a timer of its own,
+	// which would throw that count off; the card has its own tests.
+	cfg.Tuning = false
 	r := NewOverlayRenderer(cfg, fake, clk, testLogger())
 
 	if err := r.ShowChannel(context.Background(), "1", "ErsatzTV"); err != nil {
@@ -380,4 +392,172 @@ func waitForWaiters(t *testing.T, clk *system.FakeClock, want int) {
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatalf("expected %d pending timers, have %d", want, clk.Waiters())
+}
+
+func TestASSTuningDotsAnimateWithoutChangingWidth(t *testing.T) {
+	r := NewOverlayRenderer(overlayConfig(), NewFake(), system.NewFakeClock(time.Now()), testLogger())
+
+	seen := map[string]bool{}
+	for phase := 0; phase < 8; phase++ {
+		got := r.ASSTuning("2", "Music TV", phase)
+		// The glyph count never changes, whatever the phase. Appending real
+		// dots as it animated would change the line's width every frame and
+		// make the centred text jitter from side to side.
+		if n := strings.Count(got, "."); n != tuningDots {
+			t.Errorf("phase %d drew %d dots, want %d: %q", phase, n, tuningDots, got)
+		}
+		seen[got] = true
+	}
+	if len(seen) != tuningDots+1 {
+		t.Errorf("got %d distinct frames, want %d before it repeats", len(seen), tuningDots+1)
+	}
+}
+
+func TestASSTuningIsCentredAndNamesTheChannel(t *testing.T) {
+	cfg := overlayConfig()
+	cfg.Position = "top-left" // the card ignores this: it owns the whole screen
+	r := NewOverlayRenderer(cfg, NewFake(), system.NewFakeClock(time.Now()), testLogger())
+
+	got := r.ASSTuning("2", "Music TV", 0)
+	for _, want := range []string{`\an5`, `\pos(640,360)`, "CH 2", "TUNING"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("tuning card is missing %s: %s", want, got)
+		}
+	}
+}
+
+func TestASSTuningEscapesTheChannelName(t *testing.T) {
+	// Channel names come from ErsatzTV, so the card must escape them just as
+	// the banner does.
+	cfg := overlayConfig()
+	cfg.TextFormat = "CH %s - %s"
+	r := NewOverlayRenderer(cfg, NewFake(), system.NewFakeClock(time.Now()), testLogger())
+
+	got := r.ASSTuning("2", `Music {\c&HFF0000&}`, 0)
+	if strings.Contains(got, `{\c&HFF0000&}`) {
+		t.Errorf("markup was not escaped: %s", got)
+	}
+}
+
+func TestTuningCardGoesUpImmediatelyAndAnimates(t *testing.T) {
+	// A cold channel change leaves the outgoing frame frozen on screen for
+	// several seconds, so the card has to appear at once and then visibly keep
+	// moving, or a nine-second wait reads as a wedged appliance.
+	fake := NewFake()
+	clk := system.NewFakeClock(time.Now())
+	cfg := overlayConfig()
+	cfg.TuningInterval = config.Dur(400 * time.Millisecond)
+	r := NewOverlayRenderer(cfg, fake, clk, testLogger())
+
+	if err := r.ShowChannel(context.Background(), "2", "Music TV"); err != nil {
+		t.Fatal(err)
+	}
+	first, ok := fake.LastCall()
+	if !ok {
+		t.Fatal("nothing was drawn")
+	}
+	if data, _ := first.Args[3].(string); !strings.Contains(data, "TUNING") {
+		t.Fatalf("the first draw should be the tuning card: %q", data)
+	}
+
+	// Two timers: the safety-net hold, and the animation.
+	waitForWaiters(t, clk, 2)
+	before := len(fake.CallsNamed("osd-overlay"))
+	clk.Advance(cfg.TuningInterval.Duration)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && len(fake.CallsNamed("osd-overlay")) == before {
+		time.Sleep(time.Millisecond)
+	}
+	if len(fake.CallsNamed("osd-overlay")) == before {
+		t.Error("the tuning card never animated")
+	}
+}
+
+func TestTuningCardGivesWayToTheBannerWhenThePictureArrives(t *testing.T) {
+	fake := NewFake()
+	clk := system.NewFakeClock(time.Now())
+	cfg := overlayConfig()
+	cfg.Duration = config.Dur(2 * time.Second)
+	r := NewOverlayRenderer(cfg, fake, clk, testLogger())
+
+	if err := r.ShowChannel(context.Background(), "2", "Music TV"); err != nil {
+		t.Fatal(err)
+	}
+	r.PlaybackStarted()
+
+	// The full-screen card is for the black; once there is a picture the
+	// ordinary corner banner takes over for its normal turn.
+	var data string
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if c, ok := fake.LastCall(); ok {
+			data, _ = c.Args[3].(string)
+			// The banner's corner position: the card uses \pos(0,0) for its
+			// background and \pos(640,360) for its text, never this.
+			if strings.Contains(data, `\pos(64,48)`) {
+				break
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if !strings.Contains(data, `\pos(64,48)`) || strings.Contains(data, "TUNING") {
+		t.Errorf("the card should have given way to the corner banner, got %q", data)
+	}
+}
+
+func TestASSTuningPaintsOverTheFrozenFrame(t *testing.T) {
+	// mpv leaves the outgoing channel's last frame on screen until the new one
+	// decodes. Letting it show through the card makes a channel change look
+	// like the picture has crashed, so the card paints the canvas out first.
+	cfg := overlayConfig()
+	cfg.TuningBackground = "#000000"
+	r := NewOverlayRenderer(cfg, NewFake(), system.NewFakeClock(time.Now()), testLogger())
+
+	lines := strings.Split(r.ASSTuning("2", "Music TV", 0), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected a background event then a text event, got %d: %q", len(lines), lines)
+	}
+	for _, want := range []string{
+		`\p1`,                               // drawing mode
+		`\c&H000000&`,                       // black fill
+		`\alpha&H00&`,                       // fully opaque, or the frame shows through
+		`\bord0`,                            // no outline around a full-screen box
+		"m 0 0 l 1280 0 l 1280 720 l 0 720", // the whole canvas
+	} {
+		if !strings.Contains(lines[0], want) {
+			t.Errorf("background event is missing %s: %s", want, lines[0])
+		}
+	}
+	// Order matters: an event drawn after the background sits on top of it.
+	if !strings.Contains(lines[1], "TUNING") {
+		t.Errorf("the card text must be the second event, got %q", lines[1])
+	}
+}
+
+func TestASSTuningBackgroundCanBeTurnedOff(t *testing.T) {
+	cfg := overlayConfig()
+	cfg.TuningBackground = ""
+	r := NewOverlayRenderer(cfg, NewFake(), system.NewFakeClock(time.Now()), testLogger())
+
+	got := r.ASSTuning("2", "Music TV", 0)
+	if strings.Contains(got, `\p1`) {
+		t.Errorf("no background colour was set, but one was drawn: %q", got)
+	}
+	if strings.Contains(got, "\n") {
+		t.Errorf("expected a single event with no background: %q", got)
+	}
+}
+
+func TestASSTuningBackgroundFallsBackToBlackNotGreen(t *testing.T) {
+	// assColor's fallback is the banner's green, which would turn a colour typo
+	// into a full-screen green wall.
+	cfg := overlayConfig()
+	cfg.TuningBackground = "chartreuse"
+	r := NewOverlayRenderer(cfg, NewFake(), system.NewFakeClock(time.Now()), testLogger())
+
+	bg := strings.Split(r.ASSTuning("2", "x", 0), "\n")[0]
+	if !strings.Contains(bg, `\c&H000000&`) {
+		t.Errorf("expected a black fallback, got %s", bg)
+	}
 }
