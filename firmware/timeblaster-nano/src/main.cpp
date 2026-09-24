@@ -91,15 +91,10 @@ static void updateClockDisplay() {
   uint8_t  hour24 = (uint8_t)(secondsOfDay / 3600);
   uint8_t  minute = (uint8_t)((secondsOfDay % 3600) / 60);
 
-  // A 7-segment clock with no AM/PM indicator reads better in 12-hour form.
-  // The Pi owns the 12/24-hour preference for the companion app, and can
-  // override the whole display with DISPLAY|TEXT if it disagrees.
-  uint8_t hour12 = hour24 % 12;
-  if (hour12 == 0) {
-    hour12 = 12;
-  }
-
-  displaySetTime(hour12, minute);
+  // The Pi owns the 12/24-hour preference and pushes it over CONFIG; the
+  // display applies it. Passing the raw hour keeps that policy in one place
+  // instead of converting here and again there.
+  displaySetTime(hour24, minute);
 }
 
 // --- Inbound messages -------------------------------------------------------
@@ -145,6 +140,8 @@ static void handleMessage(const Message& msg) {
   if (msg.type == "CONFIG" && msg.argc >= 2) {
     if (msg.args[0] == "pot_threshold") {
       inputsSetPotThreshold((uint16_t)strtol(msg.args[1].c_str(), nullptr, 10));
+    } else if (msg.args[0] == "clock_24h") {
+      displaySetClock24h(msg.args[1] == "1");
     }
     return;
   }

@@ -154,6 +154,14 @@ type linkFixture struct {
 
 func newLinkFixture(t *testing.T, cfg Config, nanoEnds int) (*linkFixture, []*serialport.Pipe) {
 	t.Helper()
+	return newLinkFixtureWith(t, cfg, nanoEnds, nil)
+}
+
+// newLinkFixtureWith builds a fixture whose view of the system clock's
+// trustworthiness the test controls. A nil sync trusts it, which is what every
+// test that does not care about time synchronisation wants.
+func newLinkFixtureWith(t *testing.T, cfg Config, nanoEnds int, sync system.ClockSync) (*linkFixture, []*serialport.Pipe) {
+	t.Helper()
 
 	var piEnds []serialport.Transport
 	var nanoPipes []*serialport.Pipe
@@ -170,6 +178,7 @@ func newLinkFixture(t *testing.T, cfg Config, nanoEnds int) (*linkFixture, []*se
 
 	link := NewLink(cfg, Deps{
 		Opener: opener, Clock: clk, Logger: testLogger(), Observer: obs, Lifecycle: life,
+		ClockSync: sync,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())

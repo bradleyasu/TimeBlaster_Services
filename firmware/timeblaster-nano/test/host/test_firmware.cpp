@@ -234,6 +234,70 @@ static void testClockRendering() {
   checkBytes(hosttest::lastFrame, {five, zero, two, one}, "12:05 renders as \"12.05\"");
 }
 
+static void testClock24h() {
+  section("24-hour clock");
+
+  setupChainCapture();
+  displayInit();
+  displaySetSynced(true);
+  displaySetBrightness(75);
+  displayShowClock();
+  hosttest::nowMs = 0;   // colon lit
+
+  const uint8_t DOT = 0b00000001;
+  auto cell = [&](char c, bool colon) {
+    return colon ? (uint8_t)(~getCharacter(c) & (uint8_t)~DOT)
+                 : (uint8_t)(~getCharacter(c) | DOT);
+  };
+
+  check(!displayClock24h(), "12-hour is the default");
+
+  // The afternoon is where the two modes actually differ.
+  displaySetTime(21, 30);
+  displayTick();
+  checkBytes(hosttest::lastFrame,
+             {cell('0', false), cell('3', false), cell('9', true), cell(' ', false)},
+             "21:30 shows as \" 9.30\" in 12-hour mode");
+
+  displaySetClock24h(true);
+  check(displayClock24h(), "the mode is reported back");
+  displayTick();
+  checkBytes(hosttest::lastFrame,
+             {cell('0', false), cell('3', false), cell('1', true), cell('2', false)},
+             "21:30 shows as \"21.30\" in 24-hour mode");
+
+  // Morning hours keep their leading zero in 24-hour form, which is both the
+  // convention and the cue for which mode the clock is in.
+  displaySetTime(9, 5);
+  displayTick();
+  checkBytes(hosttest::lastFrame,
+             {cell('5', false), cell('0', false), cell('9', true), cell('0', false)},
+             "09:05 keeps its leading zero in 24-hour mode");
+
+  // Midnight is the case the old code could not express: hour 0 doubled as the
+  // "no time yet" sentinel, so 00:xx would have rendered as four dashes.
+  displaySetTime(0, 7);
+  displayTick();
+  checkBytes(hosttest::lastFrame,
+             {cell('7', false), cell('0', false), cell('0', true), cell('0', false)},
+             "midnight renders as \"00.07\", not as the no-time dashes");
+
+  displaySetClock24h(false);
+  displayTick();
+  checkBytes(hosttest::lastFrame,
+             {cell('7', false), cell('0', false), cell('2', true), cell('1', false)},
+             "midnight is 12 in 12-hour mode");
+
+  // And with no time at all it is still dashes.
+  displayInit();
+  displaySetSynced(true);
+  displayShowClock();
+  displayTick();
+  uint8_t dash = (uint8_t)(~getCharacter('-') | DOT);
+  checkBytes(hosttest::lastFrame, {dash, dash, dash, dash},
+             "no time received yet still shows dashes");
+}
+
 static void testOverrideTextAndReturn() {
   section("override text");
 
@@ -591,6 +655,7 @@ int main() {
   testDigitCountClamping();
   testScrolling();
   testClockRendering();
+  testClock24h();
   testOverrideTextAndReturn();
   testBrightnessZeroBlanks();
   testAlarmFlash();

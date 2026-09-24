@@ -75,6 +75,15 @@ func (a *App) UpdateSettings(ctx context.Context, s web.Settings) (web.Settings,
 		if err := storage.SetBool(a.store, storage.KeyClock24h, s.Clock24h); err != nil {
 			return web.Settings{}, err
 		}
+		// The 7-segment display formats the time itself, so the preference has
+		// to reach it. Without this the setting changed the companion app and
+		// left the hardware clock in whatever mode it booted in.
+		if a.nano != nil {
+			if err := a.nano.SetClock24h(s.Clock24h); err != nil {
+				a.log.Debug("could not tell the Nano the clock format changed", "error", err)
+			}
+		}
+		a.log.Info("clock format changed", "clock_24h", s.Clock24h)
 	}
 
 	if s.DisplayOn != current.DisplayOn {

@@ -36,6 +36,8 @@ type Nano interface {
 	ShowClock() error
 	// SetDisplayOn lights or blanks the 7-segment display.
 	SetDisplayOn(on bool) error
+	// SetClock24h selects 12- or 24-hour time on the 7-segment display.
+	SetClock24h(on bool) error
 	// SetLED sets a named LED.
 	SetLED(name string, on bool) error
 	// Connected reports whether the Nano is currently reachable.
@@ -75,6 +77,10 @@ type Config struct {
 	WriteQueueSize int
 	// DisplayOn is applied to the display on every (re)connection.
 	DisplayOn bool
+	// Clock24h seeds the display's 12/24-hour mode, so the Nano is put into the
+	// stored preference the first time it connects rather than after the user
+	// next touches the setting.
+	Clock24h bool
 }
 
 // DefaultConfig returns sensible link tuning.
@@ -113,6 +119,7 @@ type Link struct {
 
 	observer  Observer
 	lifecycle LifecycleHook
+	clockSync system.ClockSync
 
 	// outbound carries queued messages to the writer. It is buffered; when full,
 	// the oldest message is dropped rather than blocking a caller, because no
@@ -122,9 +129,11 @@ type Link struct {
 
 	mu     sync.RWMutex
 	status Status
-	// alarmActive and displayText hold the state to restore after a reconnect.
+	// alarmActive, displayText and clock24h hold the state to restore after a
+	// reconnect. The Nano keeps none of it across a replug.
 	alarmActive bool
 	displayText string
+	clock24h    bool
 
 	connected atomic.Bool
 }
@@ -136,6 +145,9 @@ type Deps struct {
 	Logger    *slog.Logger
 	Observer  Observer
 	Lifecycle LifecycleHook
+	// ClockSync reports whether the system clock is trustworthy yet. Nil trusts
+	// it unconditionally.
+	ClockSync system.ClockSync
 }
 
 // NewLink builds a link. Call Run to start the connect/reconnect loop.
@@ -156,6 +168,8 @@ func NewLink(cfg Config, d Deps) *Link {
 		log:       d.Logger,
 		observer:  d.Observer,
 		lifecycle: d.Lifecycle,
+		clockSync: d.ClockSync,
+		clock24h:  cfg.Clock24h,
 		outbound:  make(chan protocol.Message, cfg.WriteQueueSize),
 	}
 }
@@ -289,7 +303,18 @@ func (l *Link) session(ctx context.Context, t serialport.Transport, device strin
 
 // supervise drives time sync and heartbeat checking for one session.
 func (l *Link) supervise(ctx context.Context, readErr <-chan error, lastRx <-chan time.Time) error {
-	syncTimer := l.clock.NewTimer(l.cfg.TimeSyncInterval)
+	// Start on the short re-check when the clock is not trustworthy yet.
+	// Scheduling the first tick a whole TimeSyncInterval out would leave the
+	// Nano animating for the full minute even though NTP typically lands after
+	// about thirty seconds.
+	firstTick := l.cfg.TimeSyncInterval
+	if !l.clockReady() {
+		firstTick = clockWaitPoll
+	}
+	syncTimer := l.clock.NewTimer(firstTick)
+	// Tracks whether the "waiting for the clock" notice has been logged, so a
+	// two-second poll does not fill the journal.
+	waitingLogged := false
 	defer syncTimer.Stop()
 
 	// The heartbeat is checked on its own cadence rather than with a per-message
@@ -318,6 +343,24 @@ func (l *Link) supervise(ctx context.Context, readErr <-chan error, lastRx <-cha
 			last = t
 
 		case <-syncTimer.C():
+			if !l.clockReady() {
+				// The Nano keeps its loading animation running until the first
+				// TIME arrives, so withholding it is what keeps yesterday's
+				// time off the display. Poll briskly rather than at the normal
+				// interval, so the clock appears promptly once NTP lands
+				// instead of up to a minute later.
+				if !waitingLogged {
+					l.log.Info("holding the clock display until the system clock is synchronised")
+					waitingLogged = true
+				}
+				syncTimer.Reset(clockWaitPoll)
+				break
+			}
+			if waitingLogged {
+				l.log.Info("system clock synchronised; sending the time to the Nano",
+					"now", l.clock.Now().Format(time.RFC3339))
+				waitingLogged = false
+			}
 			if err := l.SetTime(l.clock.Now()); err != nil {
 				l.log.Debug("periodic time sync could not be queued", "error", err)
 			}
@@ -516,13 +559,32 @@ var (
 // unplug/replug path work without anyone having to think about it: the Nano
 // comes back knowing nothing, and a moment later it knows the time, the alarm
 // state, whether the display is lit, and what to display.
+// clockWaitPoll is how often the link rechecks an unsynchronised clock. NTP
+// typically lands about half a minute after boot, and two seconds keeps the
+// delay between that and the display updating imperceptible.
+const clockWaitPoll = 2 * time.Second
+
+// clockReady reports whether the system clock is worth sending to the Nano.
+func (l *Link) clockReady() bool {
+	if l.clockSync == nil {
+		return true
+	}
+	return l.clockSync.Synced()
+}
+
 func (l *Link) Resync() {
 	l.mu.RLock()
 	alarmActive, text, displayOn := l.alarmActive, l.displayText, l.cfg.DisplayOn
+	clock24h := l.clock24h
 	l.mu.RUnlock()
 
-	_ = l.SetTime(l.clock.Now())
+	// Only if the Pi knows what time it is. Sending an unsynchronised clock
+	// would replace the Nano's loading animation with yesterday's time.
+	if l.clockReady() {
+		_ = l.SetTime(l.clock.Now())
+	}
 	_ = l.SetDisplayOn(displayOn)
+	_ = l.SetClock24h(clock24h)
 	_ = l.SetAlarmActive(alarmActive)
 	_ = l.SetLED(protocol.LEDAlarm, alarmActive)
 	if text != "" {
@@ -555,6 +617,17 @@ func (l *Link) ShowText(text string) error {
 	l.displayText = text
 	l.mu.Unlock()
 	return l.enqueue(protocol.DisplayText(l.seq.Next(), text), true)
+}
+
+// SetClock24h selects 12- or 24-hour time on the 7-segment display.
+//
+// The Nano forgets this when it is unplugged, so the value is kept here and
+// re-sent by Resync on every reconnect.
+func (l *Link) SetClock24h(on bool) error {
+	l.mu.Lock()
+	l.clock24h = on
+	l.mu.Unlock()
+	return l.enqueue(protocol.ConfigClock24h(l.seq.Next(), on), true)
 }
 
 // ShowClock returns the display to normal.

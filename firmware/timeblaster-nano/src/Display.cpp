@@ -21,8 +21,13 @@ static const unsigned long ALARM_FLASH_MS  = 400;   // matches the alarm LED
 static bool displayModeClock = true;
 static char overrideText[24] = {0};
 
-static int  clockHour   = 0;    // 1-12; 0 means "no time yet"
+static int  clockHour   = 0;    // 0-23 as the Pi supplies it
 static int  clockMinute = 0;
+// Whether a time has been received at all. This used to be inferred from
+// clockHour being zero, which cannot survive 24-hour mode: midnight is hour 0.
+static bool clockHasTime = false;
+// clock24h follows the user's setting, pushed by the Pi over CONFIG.
+static bool clock24h = false;
 
 static bool alarmActive   = false;
 static bool timeSynced    = false;
@@ -48,6 +53,7 @@ void displayInit() {
   displayModeClock = true;
   overrideText[0] = '\0';
   clockHour = 0;
+  clockHasTime = false;
   clockMinute = 0;
   alarmActive = false;
   timeSynced = false;
@@ -83,15 +89,20 @@ void displaySetSynced(bool synced) {
   }
 }
 
-void displaySetTime(int hour12, int minute) {
-  if (hour12 < 0)  hour12 = 0;
-  if (hour12 > 12) hour12 = 12;
+void displaySetTime(int hour24, int minute) {
+  if (hour24 < 0)  hour24 = 0;
+  if (hour24 > 23) hour24 = 23;
   if (minute < 0)  minute = 0;
   if (minute > 59) minute = 59;
 
-  clockHour = hour12;
+  clockHour = hour24;
   clockMinute = minute;
+  clockHasTime = true;
 }
+
+void displaySetClock24h(bool on) { clock24h = on; }
+
+bool displayClock24h() { return clock24h; }
 
 void displayShowClock() {
   displayModeClock = true;
@@ -133,19 +144,35 @@ void displaySetAlarmActive(bool active) {
 
 // buildClockText renders the time as four cells. The decimal point after the
 // hours stands in for the colon, because the HDSP-K511 has a point per digit
-// and no separate colon. A leading space rather than a leading zero reads far
-// better on a clock: " 9.30", not "09.30".
+// and no separate colon.
+//
+// The two modes pad differently on purpose. A 12-hour clock reads far better
+// with a leading space than a leading zero -- " 9.30", not "09.30" -- while a
+// 24-hour clock conventionally keeps the zero, and "09.30" is also what tells
+// the viewer at a glance which mode they are in on a display with no AM/PM
+// indicator.
 static void buildClockText(char* out, size_t n, bool colonOn) {
-  if (clockHour <= 0) {
+  if (!clockHasTime) {
     strncpy(out, "----", n - 1);
     out[n - 1] = '\0';
     return;
   }
-  if (colonOn) {
-    snprintf(out, n, "%2d.%02d", clockHour, clockMinute);
-  } else {
-    snprintf(out, n, "%2d%02d", clockHour, clockMinute);
+
+  int shown = clockHour;
+  if (!clock24h) {
+    shown = clockHour % 12;
+    if (shown == 0) {
+      shown = 12;   // midnight and noon are both 12, never 0
+    }
   }
+
+  const char* fmt;
+  if (clock24h) {
+    fmt = colonOn ? "%02d.%02d" : "%02d%02d";
+  } else {
+    fmt = colonOn ? "%2d.%02d" : "%2d%02d";
+  }
+  snprintf(out, n, fmt, shown, clockMinute);
 }
 
 void displayTick() {

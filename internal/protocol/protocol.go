@@ -113,6 +113,15 @@ const (
 	EdgeUp   = "UP"
 )
 
+// CONFIG keys. The firmware matches on these exact strings.
+const (
+	// ConfigKeyPotThreshold is the change a potentiometer must move before the
+	// Nano reports it.
+	ConfigKeyPotThreshold = "pot_threshold"
+	// ConfigKeyClock24h selects 24-hour time on the 7-segment display.
+	ConfigKeyClock24h = "clock_24h"
+)
+
 // LED names.
 const (
 	LEDAlarm = "ALARM"

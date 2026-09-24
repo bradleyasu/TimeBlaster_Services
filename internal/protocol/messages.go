@@ -68,6 +68,11 @@ func Config(seq int, key, value string) Message {
 	return Message{Seq: seq, Type: TypeConfig, Args: []string{key, value}}
 }
 
+// ConfigClock24h selects 12- or 24-hour time on the 7-segment display.
+func ConfigClock24h(seq int, on bool) Message {
+	return Config(seq, ConfigKeyClock24h, boolArg(on))
+}
+
 // Ack positively acknowledges the peer's sequence number.
 func Ack(seq, acked int) Message {
 	return Message{Seq: seq, Type: TypeAck, Args: []string{strconv.Itoa(acked)}}

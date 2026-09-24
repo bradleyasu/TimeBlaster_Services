@@ -53,6 +53,11 @@ func (f *FakeNano) ShowText(text string) error {
 // ShowClock records a return to the clock display.
 func (f *FakeNano) ShowClock() error { return f.record(Command{Kind: "display-clock"}) }
 
+// SetClock24h records the 12/24-hour preference.
+func (f *FakeNano) SetClock24h(on bool) error {
+	return f.record(Command{Kind: "clock-24h", Flag: on})
+}
+
 // SetDisplayOn records the display being lit or blanked.
 func (f *FakeNano) SetDisplayOn(on bool) error {
 	return f.record(Command{Kind: "display-on", Flag: on})

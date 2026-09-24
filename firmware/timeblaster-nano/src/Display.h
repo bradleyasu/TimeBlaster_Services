@@ -22,8 +22,17 @@ void displayTick();
 // displayShowClock returns the display to showing the time.
 void displayShowClock();
 
-// displaySetTime updates the time the clock mode shows. Hours are 1-12.
-void displaySetTime(int hour12, int minute);
+// displaySetTime updates the time the clock mode shows. Hours are 0-23; the
+// 12/24-hour conversion happens here rather than at the call site, so the
+// display owns its own formatting.
+void displaySetTime(int hour24, int minute);
+
+// displaySetClock24h selects 24-hour display. It follows the user's setting,
+// which the Pi pushes over CONFIG and re-sends on every reconnect.
+void displaySetClock24h(bool on);
+
+// displayClock24h reports the current mode.
+bool displayClock24h();
 
 // displaySetText overrides the clock with literal text until displayShowClock()
 // is called. Text longer than the four digits scrolls by itself.
