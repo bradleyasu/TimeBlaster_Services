@@ -87,6 +87,9 @@ func parseEXTINF(line string) (Channel, bool) {
 		}
 	}
 
+	// tvg-id joins the channel to its programmes in the XMLTV guide.
+	ch.GuideID = strings.TrimSpace(attrs["tvg-id"])
+
 	ch.Name = strings.TrimSpace(attrs["tvg-name"])
 	if ch.Name == "" {
 		ch.Name = displayName(line)

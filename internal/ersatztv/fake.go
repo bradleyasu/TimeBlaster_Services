@@ -10,6 +10,7 @@ import (
 type Fake struct {
 	mu       sync.Mutex
 	channels []Channel
+	guide    XMLTV
 	// Err, when set, is returned by Channels and Ping, simulating a server that
 	// is down or still starting.
 	Err error
@@ -62,6 +63,26 @@ func (f *Fake) CallCount() int {
 // StreamURL builds a predictable fake URL.
 func (f *Fake) StreamURL(c Channel) string {
 	return f.BaseURL() + "/iptv/channel/" + c.Number + ".m3u8"
+}
+
+// Guide returns the configured guide.
+func (f *Fake) Guide(context.Context) (XMLTV, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.Err != nil {
+		return XMLTV{}, f.Err
+	}
+	if f.guide.Programmes == nil {
+		return XMLTV{Programmes: map[string][]Programme{}, Numbers: map[string]string{}}, nil
+	}
+	return f.guide, nil
+}
+
+// SetGuide replaces the schedule the fake serves.
+func (f *Fake) SetGuide(x XMLTV) {
+	f.mu.Lock()
+	f.guide = x
+	f.mu.Unlock()
 }
 
 // Ping reports the configured error.

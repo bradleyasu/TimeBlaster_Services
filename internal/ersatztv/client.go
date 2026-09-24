@@ -30,6 +30,9 @@ type Channel struct {
 	Number string `json:"number"`
 	// Name is the display name, used in the channel-change overlay.
 	Name string `json:"name"`
+	// GuideID is the playlist's tvg-id, e.g. "C2.146.ersatztv.org". It is the
+	// key that joins a channel to its programmes in the XMLTV guide.
+	GuideID string `json:"guideId,omitempty"`
 	// StreamingMode is ErsatzTV's per-channel mode, e.g. HttpLiveStreamingDirect.
 	StreamingMode string `json:"streamingMode,omitempty"`
 	// Language is an ISO code, carried through for completeness.
@@ -81,6 +84,10 @@ type API interface {
 	Channels(ctx context.Context) ([]Channel, error)
 	// StreamURL returns the playback URL for a channel.
 	StreamURL(c Channel) string
+	// Guide returns the published schedule, keyed by XMLTV channel id. It is
+	// deliberately not merged with the lineup here: the caller already holds the
+	// authoritative channel list, so merging needs no second playlist fetch.
+	Guide(ctx context.Context) (XMLTV, error)
 	// Ping reports whether the server is reachable.
 	Ping(ctx context.Context) error
 	// BaseURL returns the configured server address, for diagnostics.
@@ -183,6 +190,15 @@ func (c *Client) Channels(ctx context.Context) ([]Channel, error) {
 	// ParseM3U already drops entries with no channel number, so nothing that
 	// would become a dead band on the channel knob survives.
 	return ParseM3U(raw), nil
+}
+
+// Guide fetches and parses the XMLTV schedule.
+func (c *Client) Guide(ctx context.Context) (XMLTV, error) {
+	body, err := c.get(ctx, GuidePath)
+	if err != nil {
+		return XMLTV{}, err
+	}
+	return ParseXMLTV(body)
 }
 
 // Ping checks that the server is up. It uses the playlist endpoint because a
