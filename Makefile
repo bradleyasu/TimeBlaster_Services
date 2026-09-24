@@ -14,6 +14,12 @@ VERSION  ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev
 LDFLAGS  := -s -w -X main.version=$(VERSION)
 GOFLAGS  := -trimpath
 
+# setup.sh installs Go under /usr/local/go, which Raspberry Pi OS puts on no
+# shell's PATH -- not even a login one. Falling back to the explicit path is
+# what lets `make update` build on the Pi without the caller arranging a PATH.
+GO       ?= $(shell command -v go 2>/dev/null || echo /usr/local/go/bin/go)
+GOFMT    ?= $(dir $(GO))gofmt
+
 BIN_DIR  := bin
 CMDS     := timeblasterd timeblaster-wifi tbctl
 
@@ -50,7 +56,7 @@ build: ## Build all binaries for this machine
 	@mkdir -p $(BIN_DIR)
 	@for cmd in $(CMDS); do \
 		printf '  building %s\n' "$$cmd"; \
-		CGO_ENABLED=0 go build $(GOFLAGS) -ldflags "$(LDFLAGS)" \
+		CGO_ENABLED=0 $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" \
 			-o $(BIN_DIR)/$$cmd ./cmd/$$cmd || exit 1; \
 	done
 	@printf '\nBuilt $(words $(CMDS)) binaries in $(BIN_DIR)/\n'
@@ -61,7 +67,7 @@ build-pi: ## Cross-compile for the Raspberry Pi (linux/arm64)
 	@for cmd in $(CMDS); do \
 		printf '  building %s for $(PI_GOOS)/$(PI_GOARCH)\n' "$$cmd"; \
 		GOOS=$(PI_GOOS) GOARCH=$(PI_GOARCH) CGO_ENABLED=0 \
-			go build $(GOFLAGS) -ldflags "$(LDFLAGS)" \
+			$(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" \
 			-o $(BIN_DIR)/$(PI_GOOS)-$(PI_GOARCH)/$$cmd ./cmd/$$cmd || exit 1; \
 	done
 	@printf '\nBuilt for the Pi in $(BIN_DIR)/$(PI_GOOS)-$(PI_GOARCH)/\n'
@@ -77,13 +83,13 @@ splash-check: ## Report what the boot screen would paint (safe anywhere)
 .PHONY: clean
 clean: ## Remove build output
 	rm -rf $(BIN_DIR) coverage.out coverage.html
-	go clean -testcache
+	$(GO) clean -testcache
 
 # --- Test -------------------------------------------------------------------
 
 .PHONY: test
 test: ## Run all Go tests with the race detector
-	go test -race -timeout 300s ./...
+	$(GO) test -race -timeout 300s ./...
 
 .PHONY: firmware-test
 firmware-test: ## Run the Arduino firmware's host tests (no board required)
@@ -95,18 +101,18 @@ firmware-fixture: ## Regenerate the protocol fixture from the firmware encoder
 
 .PHONY: test-short
 test-short: ## Run tests without the race detector (faster)
-	go test -timeout 120s ./...
+	$(GO) test -timeout 120s ./...
 
 .PHONY: cover
 cover: ## Run tests and open a coverage report
-	go test -race -coverprofile=coverage.out -covermode=atomic ./...
-	go tool cover -func=coverage.out | tail -1
-	go tool cover -html=coverage.out -o coverage.html
+	$(GO) test -race -coverprofile=coverage.out -covermode=atomic ./...
+	$(GO) tool cover -func=coverage.out | tail -1
+	$(GO) tool cover -html=coverage.out -o coverage.html
 	@printf '\nCoverage report: coverage.html\n'
 
 .PHONY: bench
 bench: ## Run benchmarks
-	go test -bench=. -benchmem -run='^$$' ./...
+	$(GO) test -bench=. -benchmem -run='^$$' ./...
 
 # --- Quality ----------------------------------------------------------------
 
@@ -126,15 +132,15 @@ lint: fmt-check vet ## Run all static checks
 
 .PHONY: vet
 vet: ## Run go vet
-	go vet ./...
+	$(GO) vet ./...
 
 .PHONY: fmt
 fmt: ## Format all Go source
-	gofmt -s -w .
+	$(GOFMT) -s -w .
 
 .PHONY: fmt-check
 fmt-check: ## Fail if any Go source is unformatted
-	@unformatted=$$(gofmt -s -l . | grep -v '^$$' || true); \
+	@unformatted=$$($(GOFMT) -s -l . | grep -v '^$$' || true); \
 	if [ -n "$$unformatted" ]; then \
 		printf 'These files need gofmt:\n%s\n' "$$unformatted"; exit 1; \
 	fi
@@ -142,8 +148,8 @@ fmt-check: ## Fail if any Go source is unformatted
 
 .PHONY: tidy
 tidy: ## Tidy and verify go.mod
-	go mod tidy
-	go mod verify
+	$(GO) mod tidy
+	$(GO) mod verify
 
 .PHONY: check
 check: lint test firmware-test ## Everything CI would run
@@ -161,15 +167,15 @@ dev: ## Run timeblasterd locally against a scratch config (no hardware needed)
 		    deploy/config/timeblaster.toml > .dev/timeblaster.toml; \
 		printf 'Created .dev/timeblaster.toml\n'; \
 	fi
-	go run ./cmd/timeblasterd --config .dev/timeblaster.toml --log-level debug --log-time
+	$(GO) run ./cmd/timeblasterd --config .dev/timeblaster.toml --log-level debug --log-time
 
 .PHONY: check-config
 check-config: ## Validate the shipped configuration file
-	go run ./cmd/timeblasterd --config deploy/config/timeblaster.toml --check-config
+	$(GO) run ./cmd/timeblasterd --config deploy/config/timeblaster.toml --check-config
 
 .PHONY: print-config
 print-config: ## Print the effective default configuration
-	go run ./cmd/timeblasterd --print-config
+	$(GO) run ./cmd/timeblasterd --print-config
 
 # --- Install and operate on the Pi ------------------------------------------
 
