@@ -40,6 +40,9 @@ PI_USER  ?= $(shell whoami)
 PI_KEY   ?=
 # Where the repository is checked out on the Pi, for `make deploy-git`.
 PI_CHECKOUT ?= ~/timeblaster
+
+# The branch deploys are checked against.
+GIT_BRANCH ?= $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null)
 SSH_OPTS := $(if $(PI_KEY),-i $(PI_KEY),)
 PI_SSH   := $(PI_USER)@$(PI)
 
@@ -185,13 +188,30 @@ install: ## Install on THIS machine (run on the Pi, as root)
 	./setup.sh
 
 .PHONY: deploy
-deploy: build-pi ## Cross-compile and copy the binaries to the Pi over SSH
+deploy: verify-synced build-pi ## Cross-compile and copy the binaries to the Pi over SSH
 	@printf 'Deploying $(VERSION) to $(PI_SSH)\n'
 	scp $(SSH_OPTS) $(BIN_DIR)/$(PI_GOOS)-$(PI_GOARCH)/* $(PI_SSH):/tmp/
 	ssh -t $(SSH_OPTS) $(PI_SSH) 'sudo install -m 0755 /tmp/timeblasterd /tmp/timeblaster-wifi /tmp/tbctl /usr/local/bin/ && \
 	           rm -f /tmp/timeblasterd /tmp/timeblaster-wifi /tmp/tbctl && \
 	           sudo systemctl restart timeblaster-wifi.service timeblaster.service'
 	@printf 'Deployed. Check with: make logs\n'
+
+.PHONY: verify-synced
+verify-synced: ## Fail unless the tree is clean and matches origin
+# `make deploy` cross-compiles the working tree, so without this a deployed
+# binary can contain changes that exist on no other machine and in no commit --
+# with the "-dirty" suffix in the version string as the only clue, and only if
+# someone thinks to look. Set ALLOW_DIRTY=1 to deploy work in progress on
+# purpose.
+ifdef ALLOW_DIRTY
+	@printf '\nALLOW_DIRTY is set: deploying the working tree.\n'
+	@printf 'What ends up on the Pi may exist nowhere else. Version: $(VERSION)\n\n'
+else
+	@if [ -n "$$(git status --porcelain)" ]; then 		printf '\nRefusing to deploy: the working tree has uncommitted changes.\n\n'; 		git status --short; 		printf '\nCommit and push, or deploy anyway with ALLOW_DIRTY=1.\n\n'; 		exit 1; 	fi
+	@git fetch -q origin $(GIT_BRANCH) 2>/dev/null || { 		printf '\nRefusing to deploy: could not reach origin to compare against.\n'; 		printf 'Deploy anyway with ALLOW_DIRTY=1.\n\n'; 		exit 1; 	}
+	@head=$$(git rev-parse HEAD); 	remote=$$(git rev-parse origin/$(GIT_BRANCH) 2>/dev/null); 	if [ "$$head" != "$$remote" ]; then 		printf '\nRefusing to deploy: HEAD is not what origin/%s has.\n\n' '$(GIT_BRANCH)'; 		printf '  HEAD           %s\n' "$$(git log --oneline -1 HEAD)"; 		printf '  origin/%s  %s\n\n' '$(GIT_BRANCH)' "$$(git log --oneline -1 origin/$(GIT_BRANCH))"; 		printf 'Push first, or deploy anyway with ALLOW_DIRTY=1.\n\n'; 		exit 1; 	fi
+	@printf 'In sync with origin/%s at %s\n' '$(GIT_BRANCH)' "$$(git rev-parse --short HEAD)"
+endif
 
 .PHONY: update
 update: ## Pull and deploy on THIS machine (run on the Pi)
