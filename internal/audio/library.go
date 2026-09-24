@@ -273,19 +273,26 @@ func looksLikeAudio(head []byte, ext string) bool {
 func displayName(id string) string {
 	var b strings.Builder
 	prevDigit := false
+	prevSep := false
 	for i, r := range id {
 		switch {
 		case r == '-' || r == '_':
 			b.WriteRune(' ')
 			prevDigit = false
+			prevSep = true
 			continue
 		case r >= '0' && r <= '9':
-			if !prevDigit && i > 0 {
+			// A separator has already written the space, so the digit-boundary
+			// rule must not write a second one: "alarm_1" is "Alarm 1", not
+			// "Alarm  1".
+			if !prevDigit && !prevSep && i > 0 {
 				b.WriteRune(' ')
 			}
 			prevDigit = true
+			prevSep = false
 		default:
 			prevDigit = false
+			prevSep = false
 		}
 		if i == 0 {
 			b.WriteString(strings.ToUpper(string(r)))

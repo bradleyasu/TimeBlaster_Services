@@ -723,3 +723,24 @@ func ids(ss []Sound) []string {
 	}
 	return out
 }
+
+func TestDisplayNameSeparators(t *testing.T) {
+	// A separator already contributes the space, so the digit-boundary rule
+	// must not add a second one. "alarm_1" is how the files are actually named,
+	// and it rendered as "Alarm  1" until this was fixed.
+	for _, tc := range []struct{ id, want string }{
+		{"alarm1", "Alarm 1"},
+		{"alarm_1", "Alarm 1"},
+		{"alarm-2", "Alarm 2"},
+		{"alarm_10", "Alarm 10"},
+		{"klaxon", "Klaxon"},
+		{"gentle_wake_up", "Gentle wake up"},
+		{"track_01_intro", "Track 01 intro"},
+		{"_leading", "leading"},
+		{"", ""},
+	} {
+		if got := displayName(tc.id); got != tc.want {
+			t.Errorf("displayName(%q) = %q, want %q", tc.id, got, tc.want)
+		}
+	}
+}
