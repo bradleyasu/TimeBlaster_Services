@@ -332,3 +332,41 @@ func waitFor(t *testing.T, ch <-chan struct{}) {
 		t.Fatal("timed out waiting for an event")
 	}
 }
+
+func TestAnUnfittedVolumeKnobCannotMoveTheVolume(t *testing.T) {
+	// An unconnected analog pin does not read zero. It floats at whatever charge
+	// its input capacitance holds, coupled from the neighbouring channels of the
+	// multiplexed ADC. On real hardware with nothing attached, this pin wandered
+	// between 13% and 22% while the connected channel pot beside it read exactly
+	// 1.000 every sample -- and that noise was setting the alarm volume, because
+	// the knob is authoritative by design.
+	h := newRecordingHandler()
+	clk := system.NewFakeClock(t0)
+	cfg := DefaultConfig()
+	cfg.VolumePotFitted = false
+	r := NewRouter(cfg, clk, slog.New(slog.NewTextHandler(io.Discard, nil)), h)
+
+	for _, raw := range []int{520, 640, 760, 530, 900, 610} {
+		r.PotReport(PotAlarmVolume, raw)
+	}
+
+	_, vols, _, _ := h.snapshot()
+	if len(vols) != 0 {
+		t.Errorf("an unfitted knob moved the volume %d times: %+v", len(vols), vols)
+	}
+
+	// It must still be visible, or a disconnected knob looks like a dead one.
+	if pos, primed := r.Position(PotAlarmVolume); !primed || pos == 0 {
+		t.Errorf("the reading should still be reported for diagnostics, got %v primed=%v", pos, primed)
+	}
+}
+
+func TestAFittedVolumeKnobStillWorks(t *testing.T) {
+	r, h, _ := newTestRouter(t)
+	r.PotReport(PotAlarmVolume, 2048)
+
+	_, vols, _, _ := h.snapshot()
+	if len(vols) != 1 {
+		t.Fatalf("a fitted knob should report: %+v", vols)
+	}
+}

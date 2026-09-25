@@ -375,6 +375,7 @@ func (a *App) initHardware(deps Deps) {
 	inputCfg.FilterSnap = a.cfg.Input.FilterSnapThreshold
 	inputCfg.ChannelHysteresis = a.cfg.Input.ChannelHysteresis
 	inputCfg.VolumeDeadband = a.cfg.Input.VolumeDeadbandPercent
+	inputCfg.VolumePotFitted = a.cfg.Input.VolumePotFitted
 	inputCfg.HoldDuration = a.cfg.Input.WiFiHoldDuration.Duration
 	inputCfg.MinPressDuration = a.cfg.Input.MinPressDuration.Duration
 	inputCfg.PollInterval = a.cfg.Input.HoldPollInterval.Duration

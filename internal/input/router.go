@@ -76,6 +76,11 @@ type Config struct {
 	FilterSnap        float64
 	ChannelHysteresis float64
 	VolumeDeadband    int
+	// VolumePotFitted says whether the volume knob exists. When it does not,
+	// readings from its pin are still filtered and reported for diagnostics but
+	// never move the alarm volume: an unconnected ADC pin floats, and letting
+	// that noise set the volume of an alarm is how an alarm gets missed.
+	VolumePotFitted bool
 	HoldDuration      time.Duration
 	MinPressDuration  time.Duration
 	// PollInterval is how often held buttons are checked against the hold
@@ -92,6 +97,7 @@ func DefaultConfig() Config {
 		FilterSnap:        0.08,
 		ChannelHysteresis: 0.25,
 		VolumeDeadband:    2,
+		VolumePotFitted:   true,
 		HoldDuration:      5 * time.Second,
 		MinPressDuration:  30 * time.Millisecond,
 		PollInterval:      100 * time.Millisecond,
@@ -233,7 +239,10 @@ func (r *Router) PotReport(index, raw int) {
 			chEv = &ChannelSelect{Band: band, Position: pos}
 		}
 	case PotAlarmVolume:
-		if pct, changed := r.volume.Update(pos); changed {
+		// Update regardless, so Position() still reports what the pin reads and
+		// a disconnected knob is visible rather than invisible.
+		pct, changed := r.volume.Update(pos)
+		if changed && r.cfg.VolumePotFitted {
 			volEv = &VolumeChange{Percent: pct, Physical: true}
 		}
 	default:

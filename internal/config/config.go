@@ -180,6 +180,19 @@ type Input struct {
 	// required to move between channels. It is what stops ADC noise on a boundary
 	// from flipping channels repeatedly.
 	ChannelHysteresis float64 `toml:"channel_hysteresis"`
+	// VolumePotFitted says whether the alarm volume knob is actually wired to
+	// the Nano.
+	//
+	// An unconnected analog pin does not read zero; it floats at whatever charge
+	// its input capacitance holds, coupled from the neighbouring channels of the
+	// multiplexed ADC. Measured on real hardware with nothing attached, the
+	// volume pin wandered between 13% and 22% while the channel pot beside it,
+	// which was connected, read exactly 1.000 on every sample.
+	//
+	// That noise drives the alarm volume, because the knob is authoritative by
+	// design. Set this false until the knob is wired, or the volume will drift
+	// on its own -- and a drifting alarm volume is a missed alarm.
+	VolumePotFitted bool `toml:"volume_pot_fitted"`
 	// VolumeDeadbandPercent is the minimum volume change worth acting on.
 	VolumeDeadbandPercent int `toml:"volume_deadband_percent"`
 	// WiFiHoldDuration is how long the Wi-Fi button must be held to enter setup
@@ -424,6 +437,7 @@ func Default() Config {
 			FilterAlpha:           0.35,
 			FilterSnapThreshold:   0.08,
 			ChannelHysteresis:     0.25,
+			VolumePotFitted:       true,
 			VolumeDeadbandPercent: 2,
 			WiFiHoldDuration:      Dur(5 * time.Second),
 			MinPressDuration:      Dur(30 * time.Millisecond),

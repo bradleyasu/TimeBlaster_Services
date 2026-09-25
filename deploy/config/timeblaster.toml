@@ -137,6 +137,20 @@ filter_snap_threshold = 0.08
 # and forth. Raise it if channels flicker; lower it if the knob feels sticky.
 channel_hysteresis = 0.25
 
+# Whether the alarm volume knob is actually wired to the Nano.
+#
+# An unconnected analog pin does not read zero. It floats at whatever charge its
+# input capacitance holds, coupled from the neighbouring channels of the
+# multiplexed ADC. Measured with nothing attached, the volume pin wandered
+# between 13% and 22% while the channel pot beside it, which was connected, read
+# exactly 1.000 on every sample.
+#
+# The knob is authoritative by design, so that noise sets the alarm volume. Set
+# this false until the knob is wired -- a drifting alarm volume is a missed
+# alarm. The reading is still reported either way, so a disconnected knob shows
+# up in diagnostics rather than vanishing.
+volume_pot_fitted = true
+
 # Minimum volume change worth acting on, in percent.
 volume_deadband_percent = 2
 
