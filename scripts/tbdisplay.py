@@ -16,6 +16,7 @@ setup.sh installs this file alongside timeblaster-splash so the splash has it at
 runtime.
 """
 
+import math
 import os
 import struct
 import zlib
@@ -124,6 +125,42 @@ class Canvas:
             for xx in range(cx - r, cx + r + 1):
                 if (xx - cx) ** 2 + (yy - cy) ** 2 <= r * r:
                     self.set(xx, yy, colour)
+
+    def polygon(self, points, colour):
+        """Fill a closed polygon given as a sequence of (x, y).
+
+        A scanline fill with the even-odd rule. It exists because the splat in
+        the app icon has to be one smooth outline: a union of circles scallops
+        at every intersection, which reads as a cloud rather than as thrown
+        paint. There is no imaging library on the build machine, so the fill is
+        here rather than borrowed.
+
+        Sampling a smooth curve densely enough that its segments are around a
+        pixel long is what makes the result look curved rather than faceted.
+        """
+        if len(points) < 3:
+            return
+        ys = [p[1] for p in points]
+        top = max(0, int(math.floor(min(ys))))
+        bottom = min(self.h - 1, int(math.ceil(max(ys))))
+        n = len(points)
+
+        for y in range(top, bottom + 1):
+            centre = y + 0.5
+            crossings = []
+            for i in range(n):
+                x1, y1 = points[i]
+                x2, y2 = points[(i + 1) % n]
+                # Half-open comparison, so a vertex exactly on the scanline is
+                # counted once rather than zero or twice.
+                if (y1 <= centre < y2) or (y2 <= centre < y1):
+                    crossings.append(x1 + (centre - y1) / (y2 - y1) * (x2 - x1))
+            crossings.sort()
+            for i in range(0, len(crossings) - 1, 2):
+                left = int(math.ceil(crossings[i] - 0.5))
+                right = int(math.floor(crossings[i + 1] - 0.5))
+                if right >= left:
+                    self.rect(left, y, right - left + 1, 1, colour)
 
     def text(self, s, x, y, scale, colour, spacing=1):
         """Draw s with its top-left corner at (x, y). Returns the width drawn."""

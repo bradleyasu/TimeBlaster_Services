@@ -9,6 +9,7 @@ Run it via `make assets`; setup.sh also runs it when an asset is missing.
 """
 
 import argparse
+import math
 import os
 import sys
 
@@ -20,63 +21,52 @@ from tbdisplay import (  # noqa: E402
 
 # The JoC-TV splat, in a 512x512 space.
 #
-# Defined as a union of circles rather than a curve because there is no imaging
-# library on the build machine -- only the hand-rolled Canvas in tbdisplay.py,
-# which has no path filling. Circles are the one primitive this and the SVG can
-# draw identically, so the two renderings cannot drift apart.
+# One smooth closed outline, not a union of circles. Circles were the first
+# attempt, because Canvas could already draw them -- but a union scallops at
+# every intersection and the tapered arms end in points, so it read as jagged
+# rather than as thrown paint. Canvas.polygon exists to let this be a curve.
 #
-# What separates a splat from a cloud is taper and asymmetry: arms of shrinking
-# circles flung different distances, rather than evenly spaced bumps of equal
-# size. The first attempt at this used uniform lobes and read as a cloud.
+# The outline is a radius that varies with angle, perturbed by a few low
+# harmonics. Low is the important part: harmonics 2, 3 and 5 give big rounded
+# lobes, and everything stays gently curved because nothing higher is loud
+# enough to pinch the outline into a spike.
 SPLAT_ORANGE = (247, 129, 13)
 SPLAT_INK = (255, 255, 255)
 
-_CORE = [
-    (250, 236, 96),
-    (322, 198, 58),
-    (182, 288, 52),
-    (296, 300, 46),
+SPLAT_CX, SPLAT_CY, SPLAT_R = 252.0, 240.0, 142.0
+
+# (harmonic, amplitude, phase). Phases are irregular on purpose: round numbers
+# line the lobes up and the result looks manufactured.
+SPLAT_HARMONICS = [
+    (2, 0.055, 0.60),
+    (3, 0.085, 2.35),
+    (5, 0.105, 4.10),
+    (7, 0.075, 1.15),
+    (11, 0.045, 5.30),
 ]
 
-# angle, reach, radius at the root, radius at the tip, how many circles
-_ARMS = [
-    (18, 186, 44, 7, 7),
-    (68, 126, 34, 6, 6),
-    (112, 168, 40, 5, 7),
-    (158, 150, 38, 7, 6),
-    (203, 196, 42, 6, 8),
-    (248, 118, 30, 5, 5),
-    (292, 172, 36, 6, 7),
-    (334, 138, 32, 8, 6),
-]
-
-# Flung clear of the mass. These are what make it read as thrown paint.
+# Flung clear of the mass. Genuinely round, so circles are right for these.
 SPLAT_DROPS = [
     (86, 132, 17), (432, 122, 13), (458, 306, 10),
     (62, 338, 12), (398, 86, 8), (120, 74, 7), (470, 196, 7),
 ]
 
 
-def _splat_body():
-    """The mass, as circles. Hand-tuned angles and reaches, not a loop over a
-    regular polygon -- evenly spaced arms look manufactured."""
-    import math
-
-    out = list(_CORE)
-    cx, cy = 250, 236
-    for deg, reach, r0, r1, n in _ARMS:
-        a = math.radians(deg)
-        for i in range(1, n + 1):
-            t = i / float(n)
-            out.append((
-                int(round(cx + math.cos(a) * reach * t)),
-                int(round(cy + math.sin(a) * reach * t)),
-                int(round(r0 + (r1 - r0) * t)),
-            ))
-    return out
+def splat_radius(theta):
+    r = 1.0
+    for n, amp, phase in SPLAT_HARMONICS:
+        r += amp * math.sin(n * theta + phase)
+    return SPLAT_R * r
 
 
-SPLAT_BODY = _splat_body()
+def splat_points(count):
+    """Sample the outline. Dense for the raster fill, sparse for the vector."""
+    pts = []
+    for i in range(count):
+        t = 2.0 * math.pi * i / count
+        r = splat_radius(t)
+        pts.append((SPLAT_CX + r * math.cos(t), SPLAT_CY + r * math.sin(t)))
+    return pts
 
 
 def make_icon(path, size):
@@ -88,7 +78,10 @@ def make_icon(path, size):
         return max(1, int(round(v * u)))
 
     c.rounded_rect(0, 0, size, size, s(96), BG)
-    for cx, cy, r in SPLAT_BODY + SPLAT_DROPS:
+    # Sampled finely enough that each segment is well under a pixel, so the
+    # fill is a curve rather than a polygon anyone can count the sides of.
+    c.polygon([(x * u, y * u) for x, y in splat_points(2000)], SPLAT_ORANGE)
+    for cx, cy, r in SPLAT_DROPS:
         c.circle(s(cx), s(cy), s(r), SPLAT_ORANGE)
 
     # Sized to sit inside the mass rather than spill onto the black: at 512
@@ -123,7 +116,10 @@ def make_maskable_icon(path, size=512):
         return max(1, int(round(v * inset * u)))
 
     c.rect(0, 0, size, size, BG)
-    for cx, cy, r in SPLAT_BODY + SPLAT_DROPS:
+    c.polygon(
+        [(s(x), s(y)) for x, y in splat_points(2000)], SPLAT_ORANGE
+    )
+    for cx, cy, r in SPLAT_DROPS:
         c.circle(s(cx), s(cy), sr(r), SPLAT_ORANGE)
     draw_wordmark(c, s(244), s(246), max(1, int(round(7 * inset * u))))
 
@@ -138,9 +134,26 @@ def make_icon_svg(path):
     real type available, where the PNGs are limited to the shared 5x7 bitmap
     font. Both use a monospace face so they still read as the same mark.
     """
-    circles = "".join(
-        f'<circle cx="{cx}" cy="{cy}" r="{r}"/>'
-        for cx, cy, r in SPLAT_BODY + SPLAT_DROPS
+    # A quadratic through the midpoints of a coarse sampling: C1-continuous, so
+    # it is genuinely curved at any zoom rather than a polygon with enough sides
+    # to pass at icon size. Far fewer points than the raster fill needs.
+    pts = splat_points(96)
+    n = len(pts)
+
+    def mid(a, b):
+        return ((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0)
+
+    m0 = mid(pts[-1], pts[0])
+    d = ["M%.1f %.1f" % m0]
+    for i in range(n):
+        ctrl = pts[i]
+        end = mid(pts[i], pts[(i + 1) % n])
+        d.append("Q%.1f %.1f %.1f %.1f" % (ctrl[0], ctrl[1], end[0], end[1]))
+    d.append("Z")
+
+    circles = '<path d="%s"/>' % "".join(d)
+    circles += "".join(
+        f'<circle cx="{cx}" cy="{cy}" r="{r}"/>' for cx, cy, r in SPLAT_DROPS
     )
     orange = "#%02x%02x%02x" % SPLAT_ORANGE
     mono = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
@@ -164,7 +177,7 @@ def make_icon_svg(path):
     )
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(svg)
-    print(f"wrote {path} ({len(svg)} bytes, {len(SPLAT_BODY) + len(SPLAT_DROPS)} circles)")
+    print(f"wrote {path} ({len(svg)} bytes)")
 
 
 def draw_wordmark(c, cx, cy, scale):
