@@ -113,9 +113,15 @@ func TestAlarmEditorHasAMeridiemControl(t *testing.T) {
 		t.Error("the alarm editor has no AM/PM control")
 	}
 	js := readStatic(t, "app.js")
-	for _, fn := range []string{"function setEditorTime", "function editorHour24"} {
+	for _, fn := range []string{"function setEditorTime", "function editorTime"} {
 		if !strings.Contains(js, fn) {
 			t.Errorf("app.js is missing %s, so the editor cannot convert between forms", fn)
 		}
+	}
+
+	// Reading the time must be able to fail. Clamping an impossible hour into
+	// range silently saved an alarm for a time nobody asked for.
+	if !strings.Contains(js, "time.error") {
+		t.Error("saveAlarm does not check for a rejected time; is it clamping again?")
 	}
 }
