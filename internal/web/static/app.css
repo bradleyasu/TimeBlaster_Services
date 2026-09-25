@@ -240,6 +240,10 @@ main { max-width: 640px; margin: 0 auto; padding: 0 14px 40px; }
 /* AM/PM sits beside the minutes as a stacked pair, borrowing the day buttons'
    styling so a selected half reads the same as a selected day. Hidden outright
    in 24-hour mode, where it would be meaningless. */
+/* A rejected field. Cleared the moment it is edited, so it marks "this is why
+   nothing saved" rather than becoming permanent decoration. */
+.time-row input.invalid { border-color: var(--red); color: var(--red); }
+
 .meridiem { display: flex; flex-direction: column; gap: 4px; margin-left: 6px; }
 .meridiem .day { flex: none; padding: 7px 10px; min-width: 3.4em; font-size: 12px; }
 

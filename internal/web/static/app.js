@@ -292,20 +292,38 @@
     });
   }
 
-  function editorHour24() {
-    var raw = parseInt($('ed-hour').value, 10);
-    if (isNaN(raw)) raw = 0;
+  // editorTime reads the entered time, or reports why it cannot.
+  //
+  // It rejects rather than clamps. A number input does not stop anyone typing
+  // 75, and quietly turning that into 23 -- or into midnight, in 12-hour mode
+  // -- would set an alarm for a time the user never asked for. An alarm going
+  // off at the wrong hour is the one failure an alarm clock cannot have, and a
+  // silent correction is indistinguishable from it having worked.
+  function editorTime() {
+    var use24 = editorUses24h();
+    var hourMin = use24 ? 0 : 1;
+    var hourMax = use24 ? 23 : 12;
 
-    if (editorUses24h()) {
-      return Math.min(Math.max(raw, 0), 23);
+    var hourRaw = String($('ed-hour').value).trim();
+    var minRaw = String($('ed-minute').value).trim();
+    var hour = parseInt(hourRaw, 10);
+    var minute = parseInt(minRaw, 10);
+
+    if (hourRaw === '' || isNaN(hour) || hour < hourMin || hour > hourMax) {
+      return { field: 'ed-hour', error: 'Hour must be between ' + hourMin + ' and ' + hourMax + '.' };
+    }
+    if (minRaw === '' || isNaN(minute) || minute < 0 || minute > 59) {
+      return { field: 'ed-minute', error: 'Minutes must be between 0 and 59.' };
     }
 
-    // 12 AM is hour 0 and 12 PM is hour 12, so the modulo has to come before
-    // the twelve-hour shift rather than after it.
-    var h = Math.min(Math.max(raw, 1), 12) % 12;
-    var chosen = $('ed-meridiem').querySelector('.day.on');
-    if (chosen && chosen.dataset.m === 'pm') h += 12;
-    return h;
+    if (!use24) {
+      // 12 AM is hour 0 and 12 PM is hour 12, so the modulo has to come before
+      // the twelve-hour shift rather than after it.
+      hour = hour % 12;
+      var chosen = $('ed-meridiem').querySelector('.day.on');
+      if (chosen && chosen.dataset.m === 'pm') hour += 12;
+    }
+    return { hour: hour, minute: minute };
   }
 
   function openEditor(a) {
@@ -339,14 +357,24 @@
   function closeEditor() { $('editor').hidden = true; editing = null; }
 
   function saveAlarm() {
+    var time = editorTime();
+    if (time.error) {
+      var bad = $(time.field);
+      bad.classList.add('invalid');
+      bad.focus();
+      if (bad.select) bad.select();
+      toast(time.error);
+      return;
+    }
+
     var mask = 0;
     Array.prototype.forEach.call($('ed-days').children, function (b) {
       if (b.classList.contains('on')) mask |= parseInt(b.dataset.bit, 10);
     });
 
     var body = {
-      hour: editorHour24(),
-      minute: parseInt($('ed-minute').value, 10) || 0,
+      hour: time.hour,
+      minute: time.minute,
       label: $('ed-label').value,
       repeat_days: mask,
       sound_id: $('ed-sound').value,
@@ -764,6 +792,10 @@
           o.classList.toggle('on', o === b);
         });
       });
+    });
+
+    ['ed-hour', 'ed-minute'].forEach(function (id) {
+      $(id).addEventListener('input', function () { $(id).classList.remove('invalid'); });
     });
 
     $('ed-save').addEventListener('click', saveAlarm);
