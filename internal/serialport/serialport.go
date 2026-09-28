@@ -64,6 +64,31 @@ func (o DeviceOpener) Describe() string {
 	return strings.Join(o.Config.Globs, ", ")
 }
 
+// explainOpenFailure adds the cause behind a permission error that the obvious
+// checks do not account for.
+//
+// A permission error on a device node that exists is almost never the file's
+// mode: it is the service's cgroup device filter. systemd resolves
+// DeviceAllow=char-ttyACM by looking "ttyACM" up in /proc/devices at the moment
+// it builds that filter, and if cdc_acm has not loaded yet -- which happens on
+// any boot where the Nano enumerates after the service starts -- it silently
+// drops the rule. The filter is then fixed for the life of the process, so the
+// daemon's retry loop can never recover from it, and the bare message gives no
+// hint of any of that.
+func explainOpenFailure(path string, err error) error {
+	if !errors.Is(err, os.ErrPermission) {
+		return err
+	}
+	if _, statErr := os.Stat(path); statErr != nil {
+		return err // genuinely absent; the plain message is the right one
+	}
+	return fmt.Errorf("%w -- the device exists, so this is a policy denial "+
+		"rather than a missing node. Check that the service user is in the "+
+		"dialout group, and that cdc_acm loaded before the service started "+
+		"(see /etc/modules-load.d/timeblaster.conf). Retrying cannot recover "+
+		"from the latter: the service has to be restarted", err)
+}
+
 // Open resolves and opens the port.
 func (o DeviceOpener) Open(_ context.Context) (Transport, string, error) {
 	path, err := ResolveDevice(o.Config.Device, o.Config.Globs)
@@ -79,7 +104,7 @@ func (o DeviceOpener) Open(_ context.Context) (Transport, string, error) {
 	}
 	port, err := serial.Open(path, mode)
 	if err != nil {
-		return nil, path, fmt.Errorf("serialport: opening %s: %w", path, err)
+		return nil, path, fmt.Errorf("serialport: opening %s: %w", path, explainOpenFailure(path, err))
 	}
 	if o.Config.ReadTimeout > 0 {
 		if err := port.SetReadTimeout(o.Config.ReadTimeout); err != nil {

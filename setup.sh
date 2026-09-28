@@ -503,6 +503,22 @@ install_udev() {
   ok "installed ${dst} (creates /dev/timeblaster-nano)"
 }
 
+install_modules_load() {
+  step "Ensuring the USB serial driver loads at boot"
+
+  local src="${SCRIPT_DIR}/deploy/modules-load/timeblaster.conf"
+  local dst="/etc/modules-load.d/timeblaster.conf"
+
+  if [[ -f "$dst" ]] && cmp -s "$src" "$dst"; then
+    skip "modules-load entry is already current"
+    return
+  fi
+  run install -m 0644 -o root -g root "$src" "$dst"
+  # Load it now too, so this boot does not have to wait for the next one.
+  run modprobe cdc_acm
+  ok "installed ${dst} (cdc_acm, so char-ttyACM resolves before services start)"
+}
+
 configure_hostname() {
   step "Configuring the hostname and mDNS"
 
@@ -1261,6 +1277,7 @@ main() {
   install_config
   install_assets
   install_udev
+  install_modules_load
   configure_hostname
   configure_console
   install_ersatztv

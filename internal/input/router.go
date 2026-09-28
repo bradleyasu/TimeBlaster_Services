@@ -80,9 +80,9 @@ type Config struct {
 	// readings from its pin are still filtered and reported for diagnostics but
 	// never move the alarm volume: an unconnected ADC pin floats, and letting
 	// that noise set the volume of an alarm is how an alarm gets missed.
-	VolumePotFitted bool
-	HoldDuration      time.Duration
-	MinPressDuration  time.Duration
+	VolumePotFitted  bool
+	HoldDuration     time.Duration
+	MinPressDuration time.Duration
 	// PollInterval is how often held buttons are checked against the hold
 	// threshold. The ticker only runs while a button is actually down.
 	PollInterval time.Duration

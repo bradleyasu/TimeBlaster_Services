@@ -348,3 +348,37 @@ func (d *dribbleReader) Read(p []byte) (int, error) {
 	d.pos++
 	return 1, nil
 }
+
+func TestPermissionErrorOnAnExistingDeviceExplainsItself(t *testing.T) {
+	// A permission error on a node that exists is almost never the file mode:
+	// it is the cgroup device filter. systemd drops DeviceAllow=char-ttyACM
+	// when cdc_acm has not loaded by the time it builds the filter, and the
+	// daemon then retries forever against a denial it can never clear. The bare
+	// "operation not permitted" gave no hint of that, which cost an evening.
+	existing := filepath.Join(t.TempDir(), "port")
+	if err := os.WriteFile(existing, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got := explainOpenFailure(existing, os.ErrPermission)
+	for _, want := range []string{"dialout", "cdc_acm", "restarted"} {
+		if !strings.Contains(got.Error(), want) {
+			t.Errorf("the explanation is missing %q: %v", want, got)
+		}
+	}
+	if !errors.Is(got, os.ErrPermission) {
+		t.Error("the original error must stay unwrappable")
+	}
+
+	// A device that is simply absent needs no essay.
+	missing := filepath.Join(t.TempDir(), "nope")
+	if got := explainOpenFailure(missing, os.ErrPermission); got.Error() != os.ErrPermission.Error() {
+		t.Errorf("an absent device should keep the plain message, got %v", got)
+	}
+
+	// And anything that is not a permission problem passes straight through.
+	other := errors.New("device is busy")
+	if got := explainOpenFailure(existing, other); got != other {
+		t.Errorf("a non-permission error was altered: %v", got)
+	}
+}
