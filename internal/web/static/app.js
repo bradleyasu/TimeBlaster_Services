@@ -597,6 +597,7 @@
       $('set-display-on').checked = !!s.display_on;
       $('set-overlay').checked = !!s.channel_overlay_enabled;
       fillSoundSelect($('set-sound'), s.default_sound_id);
+      $('set-tv-audio').value = s.tv_audio_output || 'hdmi';
     }).catch(fail);
   }
 
@@ -604,6 +605,7 @@
     api('PUT', 'api/settings', {
       timezone: $('set-timezone').value.trim(),
       clock_24h: $('set-clock24').checked,
+      tv_audio_output: $('set-tv-audio').value,
       display_on: $('set-display-on').checked,
       default_sound_id: $('set-sound').value,
       channel_overlay_enabled: $('set-overlay').checked

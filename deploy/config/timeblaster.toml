@@ -276,7 +276,24 @@ ipc_socket = "/run/timeblaster/mpv-tv.sock"
 #   "--cache=yes",
 #   "--demuxer-max-bytes=32MiB",
 #   "--audio-device=auto",
+# (the audio device is set over IPC once mpv connects, from audio_output below,
+#  so this argument only decides what it uses for the first fraction of a second)
 # ]
+
+# Where the television's sound goes: "hdmi" or "speaker".
+#
+# HDMI by default, and deliberately so even when the attached display has no
+# speakers of its own -- a monitor that cannot make a noise is a reason to
+# change this setting, not a reason for the television's audio to wander off to
+# the alarm speaker.
+#
+# mpv's own "auto" does exactly that: it follows the ALSA default, which is card
+# 0, and cards are numbered in enumeration order. Plugging a USB speaker in
+# before the HDMI drivers load makes it card 0, and the television goes quiet.
+# The device is therefore always selected by card name.
+#
+# Changeable from the companion app's Settings tab; this is only the default.
+audio_output = "hdmi"
 
 # Shown fullscreen whenever no channel is selected. This is what keeps a Linux
 # console off the television.

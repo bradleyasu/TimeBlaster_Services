@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/bradsheets/timeblaster/internal/config"
 	"github.com/bradsheets/timeblaster/internal/state"
 	"github.com/bradsheets/timeblaster/internal/storage"
+	"github.com/bradsheets/timeblaster/internal/system"
 	"github.com/bradsheets/timeblaster/internal/web"
 )
 
@@ -23,7 +25,53 @@ func (a *App) Settings() web.Settings {
 		DisplayOn:      a.storedDisplayOn(),
 		DefaultSoundID: storage.GetString(a.store, storage.KeyDefaultSoundID, a.cfg.Audio.DefaultSoundID),
 		OverlayEnabled: storage.GetBool(a.store, storage.KeyChannelOverlayOn, a.cfg.Overlay.Enabled),
+		TVAudioOutput:  a.storedTVAudioOutput(),
 	}
+}
+
+// storedTVAudioOutput reads where the television's sound should go, falling
+// back to the configured default if the stored value is not one we know.
+func (a *App) storedTVAudioOutput() string {
+	v := storage.GetString(a.store, storage.KeyTVAudioOutput, a.cfg.MPV.AudioOutput)
+	if !config.ValidTVAudioOutput(v) {
+		v = config.TVAudioHDMI
+	}
+	return v
+}
+
+// tvAudioDevice turns the chosen output into an mpv audio-device string.
+//
+// Always by card name, never by number: ALSA numbers cards in enumeration
+// order, so a USB speaker plugged in before the HDMI drivers load becomes card
+// 0 and mpv's "auto" follows it. That is how the television's sound ended up
+// coming out of the alarm speaker.
+func (a *App) tvAudioDevice(choice string) string {
+	if choice == config.TVAudioSpeaker {
+		if card := a.audio.CardID(); card != "" {
+			return system.ALSADeviceForCard(card)
+		}
+		a.log.Warn("no alarm speaker to send the television's audio to; using HDMI")
+	}
+	return system.ALSADeviceForCard(system.ConnectedHDMICard(a.cfg.MPV.DRMRoot))
+}
+
+// applyTVAudioOutput points mpv at the chosen output.
+//
+// Set as a property rather than a launch argument so the choice takes effect
+// without restarting playback, and re-applied whenever mpv reconnects because
+// a fresh process starts back on its own default.
+func (a *App) applyTVAudioOutput(ctx context.Context) {
+	if a.tvPlayer == nil {
+		return
+	}
+	choice := a.storedTVAudioOutput()
+	device := a.tvAudioDevice(choice)
+	if err := a.tvPlayer.SetProperty(ctx, "audio-device", device); err != nil {
+		a.log.Debug("could not set the television's audio device",
+			"output", choice, "device", device, "error", err)
+		return
+	}
+	a.log.Info("television audio output set", "output", choice, "device", device)
 }
 
 // storedDisplayOn reads whether the display should be lit.
@@ -114,6 +162,20 @@ func (a *App) UpdateSettings(ctx context.Context, s web.Settings) (web.Settings,
 			return web.Settings{}, err
 		}
 		a.scheduler.SetDefaultSound(s.DefaultSoundID)
+	}
+
+	// An omitted value means "leave it as it is". There is nothing an empty
+	// string could usefully mean for a two-valued choice, and an API client
+	// that sends only the fields it cares about should not be rejected.
+	if s.TVAudioOutput != "" && s.TVAudioOutput != current.TVAudioOutput {
+		if !config.ValidTVAudioOutput(s.TVAudioOutput) {
+			return web.Settings{}, fmt.Errorf("app: tv_audio_output must be %q or %q, got %q",
+				config.TVAudioHDMI, config.TVAudioSpeaker, s.TVAudioOutput)
+		}
+		if err := a.store.SetSetting(storage.KeyTVAudioOutput, s.TVAudioOutput); err != nil {
+			return web.Settings{}, err
+		}
+		a.applyTVAudioOutput(ctx)
 	}
 
 	if s.OverlayEnabled != current.OverlayEnabled {

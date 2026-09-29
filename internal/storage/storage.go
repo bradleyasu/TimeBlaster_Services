@@ -39,6 +39,7 @@ const (
 	KeyLastChannelNumber       = "last_channel_number"
 	KeyRestoreChannel          = "restore_channel_on_boot"
 	KeyChannelOverlayOn        = "channel_overlay_enabled"
+	KeyTVAudioOutput           = "tv_audio_output"
 	// KeyLastKnownVolume records the last volume the knob reported. It is a
 	// diagnostic only and is deliberately never replayed at startup: the physical
 	// potentiometer is the authority on volume.

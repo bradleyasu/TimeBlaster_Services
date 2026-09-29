@@ -669,6 +669,10 @@ func (a *App) onPlayerConnect(ctx context.Context, c *mpv.Client) {
 	if err := c.ObserveProperty(ctx, 1, "idle-active"); err != nil {
 		a.log.Debug("could not observe mpv idle state", "error", err)
 	}
+	// A fresh mpv starts on its own default, which follows ALSA's card 0 and so
+	// can land on the alarm speaker. Point it back where the user asked.
+	a.applyTVAudioOutput(ctx)
+
 	if a.media != nil {
 		a.media.RestorePlayback(ctx)
 	}

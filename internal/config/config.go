@@ -277,6 +277,19 @@ type MPV struct {
 	// session. See docs/troubleshooting.md for alternatives if your TV or HDMI
 	// mode misbehaves.
 	Args []string `toml:"args"`
+	// AudioOutput selects where the television's sound goes: "hdmi" or
+	// "speaker".
+	//
+	// HDMI by default, and deliberately so even when the attached display has
+	// no speakers -- a monitor that cannot make a noise is a reason to change
+	// the setting, not a reason for the television's audio to wander off to the
+	// alarm speaker on its own. mpv's "auto" does exactly that: it follows the
+	// ALSA default, which is card 0, and card numbers are assigned in
+	// enumeration order, so plugging a USB speaker in silently captured it.
+	AudioOutput string `toml:"audio_output"`
+	// DRMRoot is where display connectors are read from, to work out which HDMI
+	// port has something attached. Empty means the standard location.
+	DRMRoot string `toml:"drm_root"`
 	// NoChannelImage is shown fullscreen whenever no channel is selected, which is
 	// what keeps a Linux console off the television.
 	NoChannelImage string `toml:"no_channel_image"`
@@ -508,6 +521,7 @@ func Default() Config {
 				"--demuxer-max-bytes=32MiB",
 				"--audio-device=auto",
 			},
+			AudioOutput:       TVAudioHDMI,
 			NoChannelImage:    "/usr/share/timeblaster/assets/no-channel.png",
 			BootingImage:      "/usr/share/timeblaster/assets/booting.png",
 			BootingTimeout:    Dur(90 * time.Second),
@@ -810,6 +824,20 @@ func (c Config) SoundPath(id string) (string, error) {
 		return "", fmt.Errorf("config: sound id %q resolves outside the sounds directory", id)
 	}
 	return full, nil
+}
+
+// Where the television's sound is sent.
+const (
+	// TVAudioHDMI sends it to whichever HDMI port has a display attached.
+	TVAudioHDMI = "hdmi"
+	// TVAudioSpeaker sends it to the same USB speaker the alarm uses, for a
+	// display with no sound of its own.
+	TVAudioSpeaker = "speaker"
+)
+
+// ValidTVAudioOutput reports whether v names an output.
+func ValidTVAudioOutput(v string) bool {
+	return v == TVAudioHDMI || v == TVAudioSpeaker
 }
 
 // ParseHexColor parses "#RRGGBB" or "RRGGBB" into its components.

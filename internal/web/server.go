@@ -85,6 +85,8 @@ type Settings struct {
 	DisplayOn      bool   `json:"display_on"`
 	DefaultSoundID string `json:"default_sound_id"`
 	OverlayEnabled bool   `json:"channel_overlay_enabled"`
+	// TVAudioOutput is "hdmi" or "speaker".
+	TVAudioOutput string `json:"tv_audio_output"`
 }
 
 // SettingsService reads and writes preferences. The application wires it to

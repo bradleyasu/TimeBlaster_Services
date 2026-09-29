@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/bradsheets/timeblaster/internal/ersatztv"
 	"github.com/bradsheets/timeblaster/internal/hardware"
 	"github.com/bradsheets/timeblaster/internal/input"
+	"github.com/bradsheets/timeblaster/internal/mpv"
 	"github.com/bradsheets/timeblaster/internal/protocol"
 	"github.com/bradsheets/timeblaster/internal/wifi"
 )
@@ -294,4 +296,66 @@ func TestNanoVolumeTextAlwaysFitsFourCells(t *testing.T) {
 			t.Errorf("nanoVolumeText(%d) = %q, which is %d cells, not 4", tc.percent, got, len(got))
 		}
 	}
+}
+
+func TestTVAudioOutputSetting(t *testing.T) {
+	// mpv's "auto" follows ALSA's default, which is card 0, and card numbers
+	// are assigned in enumeration order -- so plugging in a USB speaker made it
+	// card 0 and the television's sound started coming out of it. The device is
+	// therefore always named, never numbered.
+	h := newHarness(t, nil)
+	ctx := context.Background()
+
+	if got := h.app.Settings().TVAudioOutput; got != config.TVAudioHDMI {
+		t.Errorf("default output = %q, want %q", got, config.TVAudioHDMI)
+	}
+
+	cur := h.app.Settings()
+	cur.TVAudioOutput = config.TVAudioSpeaker
+	saved, err := h.app.UpdateSettings(ctx, cur)
+	if err != nil {
+		t.Fatalf("UpdateSettings: %v", err)
+	}
+	if saved.TVAudioOutput != config.TVAudioSpeaker {
+		t.Errorf("saved %q", saved.TVAudioOutput)
+	}
+
+	// mpv was pointed at the speaker by card name.
+	last, ok := lastSetProperty(h.player, "audio-device")
+	if !ok {
+		t.Fatal("mpv was never told which audio device to use")
+	}
+	if !strings.Contains(last, "CARD=") {
+		t.Errorf("the device must be named, not numbered: %q", last)
+	}
+
+	// And back to HDMI.
+	cur.TVAudioOutput = config.TVAudioHDMI
+	if _, err := h.app.UpdateSettings(ctx, cur); err != nil {
+		t.Fatal(err)
+	}
+	last, _ = lastSetProperty(h.player, "audio-device")
+	if !strings.Contains(last, "vc4hdmi") {
+		t.Errorf("expected an HDMI card, got %q", last)
+	}
+
+	// An unknown value is refused rather than silently ignored.
+	cur.TVAudioOutput = "bluetooth"
+	if _, err := h.app.UpdateSettings(ctx, cur); err == nil {
+		t.Error("an unknown output should be rejected")
+	}
+}
+
+// lastSetProperty returns the most recent value mpv was given for a property.
+func lastSetProperty(p *mpv.Fake, name string) (string, bool) {
+	calls := p.CallsNamed("set_property")
+	for i := len(calls) - 1; i >= 0; i-- {
+		if len(calls[i].Args) >= 3 {
+			if n, _ := calls[i].Args[1].(string); n == name {
+				v, _ := calls[i].Args[2].(string)
+				return v, true
+			}
+		}
+	}
+	return "", false
 }

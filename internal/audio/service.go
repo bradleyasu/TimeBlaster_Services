@@ -330,6 +330,18 @@ func (s *AlarmService) StopAlarm() error {
 	return nil
 }
 
+// CardID is the stable ALSA identifier of the resolved speaker, empty if none
+// has been found. Named rather than numbered on purpose: card numbers shift
+// with enumeration order.
+func (s *AlarmService) CardID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.deviceOK {
+		return ""
+	}
+	return s.card.ID
+}
+
 // IsPlaying reports whether audio is currently playing.
 func (s *AlarmService) IsPlaying() bool {
 	s.mu.Lock()
