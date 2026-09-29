@@ -125,3 +125,43 @@ func TestAlarmEditorHasAMeridiemControl(t *testing.T) {
 		t.Error("saveAlarm does not check for a rejected time; is it clamping again?")
 	}
 }
+
+func TestEverySwitchHasItsTrackImmediatelyAfterTheInput(t *testing.T) {
+	// The switch is styled through `.switch input:checked + span`, an adjacent
+	// sibling selector. The span has to come immediately after the input or the
+	// control renders but never visibly changes state -- it looks dead rather
+	// than broken, which is the kind of failure that survives review.
+	html := readStatic(t, "index.html")
+
+	// Counting both ways matters. Matching only the well-formed shape lets a
+	// malformed switch escape the check entirely rather than fail it, which is
+	// exactly what happened the first time this test was written.
+	declared := strings.Count(html, `class="switch"`)
+	if declared == 0 {
+		t.Fatal("no switches found in index.html; has the markup changed?")
+	}
+	wellFormed := regexp.MustCompile(
+		`<span class="switch"><input[^>]*><span></span></span>`).FindAllString(html, -1)
+	if len(wellFormed) != declared {
+		t.Errorf("%d switch(es) declared but only %d have their track directly "+
+			"after the input; the rest will render but never change state",
+			declared, len(wellFormed))
+	}
+
+	css := readStatic(t, "app.css")
+	if !strings.Contains(css, ".switch input:checked + span") {
+		t.Error("app.css no longer styles the switch through the adjacent sibling")
+	}
+}
+
+func TestSettingsTogglesUseTheSwitch(t *testing.T) {
+	// Bare checkboxes next to the alarm list's switches looked like two
+	// different applications.
+	html := readStatic(t, "index.html")
+	for _, id := range []string{"set-clock24", "set-display-on", "set-overlay"} {
+		want := `<span class="switch"><input type="checkbox" id="` + id + `">`
+		if !strings.Contains(html, want) {
+			t.Errorf("%s is not wrapped in a switch", id)
+		}
+	}
+}
