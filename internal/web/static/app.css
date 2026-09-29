@@ -290,7 +290,11 @@ main { max-width: 640px; margin: 0 auto; padding: 0 14px 40px; }
    programme densities -- a music-video channel runs a four-minute median
    against half an hour for a painting channel -- so a time-column grid renders
    most of one channel as unreadable, untappable slivers. */
-.chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+/* Top margin as well as bottom: .row-head is a flex container, so the heading's
+   own bottom margin sits inside it and leaves nothing below. On the TV tab the
+   next element is a .hint, which brings its own spacing; here the chips follow
+   the REFRESH button directly and were touching it. */
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 12px; }
 .chip {
   padding: 9px 14px;
   background: var(--panel); color: var(--muted);
