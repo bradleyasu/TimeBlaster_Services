@@ -744,3 +744,57 @@ func TestDisplayNameSeparators(t *testing.T) {
 		}
 	}
 }
+
+func TestAPreviewThatHitsItsLimitStopsReportingAsPlaying(t *testing.T) {
+	// The watch goroutine had two exits and only one of them cleaned up. A
+	// preview that ran to its time limit stopped the player and returned,
+	// leaving the handle set for the rest of the service's life -- so
+	// IsPlaying stayed true forever and the companion app showed a preview
+	// still playing long after the speaker had gone quiet.
+	f := newServiceFixture(t, func(c *config.Audio) {
+		c.TestDuration = config.Dur(10 * time.Second)
+	})
+	ctx := context.Background()
+	if err := f.svc.ResolveDevice(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := f.svc.TestAlarm(ctx, "alarm1", 0); err != nil {
+		t.Fatalf("TestAlarm: %v", err)
+	}
+	if !f.svc.IsPlaying() {
+		t.Fatal("expected it to be playing")
+	}
+
+	h := f.player.LastHandle()
+	waitForClockWaiters(t, f.clock, 1)
+	f.clock.Advance(11 * time.Second)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && f.svc.IsPlaying() {
+		time.Sleep(time.Millisecond)
+	}
+	if f.svc.IsPlaying() {
+		t.Error("still reporting as playing after the time limit expired")
+	}
+	if !h.Stopped() {
+		t.Error("the player was not stopped at the limit")
+	}
+
+	// Reaching the limit is not a failure: we asked for it.
+	if got := f.svc.Health().LastError; got != "" {
+		t.Errorf("a deliberate stop was recorded as an error: %q", got)
+	}
+}
+
+func waitForClockWaiters(t *testing.T, clk *system.FakeClock, n int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if clk.Waiters() >= n {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %d clock waiter(s), got %d", n, clk.Waiters())
+}

@@ -268,31 +268,47 @@ func (s *AlarmService) watch(h Handle, soundID string, isAlarm bool, limit time.
 		limitC = t.C()
 	}
 
+	stoppedByLimit := false
 	select {
 	case <-h.Done():
-		err := h.Err()
-		s.mu.Lock()
-		current := s.handle == h
-		if current {
-			s.handle, s.playingID, s.isAlarm = nil, "", false
-		}
-		if err != nil {
-			s.lastErr = err
-		}
-		s.mu.Unlock()
-
-		if err != nil {
-			// A player that dies mid-alarm is a real problem: log it loudly. The
-			// scheduler still holds the alarm active, so the big red button keeps
-			// working and the caller can retry.
-			s.log.Error("alarm player exited unexpectedly",
-				"sound", soundID, "was_alarm", isAlarm, "error", err)
-		} else if current {
-			s.log.Info("alarm audio finished", "sound", soundID)
-		}
 	case <-limitC:
 		s.log.Debug("test playback reached its time limit", "sound", soundID)
+		stoppedByLimit = true
 		_ = h.Stop()
+		// Stop only asks the player to exit; waiting for it to actually do so
+		// is what lets the cleanup below run. Returning here instead left the
+		// handle set for the rest of the service's life, so IsPlaying stayed
+		// true forever and the companion app showed a preview still playing
+		// long after the speaker had gone quiet.
+		<-h.Done()
+	}
+
+	err := h.Err()
+	if stoppedByLimit {
+		// We asked it to stop. Whatever the player reports about being killed
+		// is the answer to our own question, not a fault.
+		err = nil
+	}
+
+	s.mu.Lock()
+	current := s.handle == h
+	if current {
+		s.handle, s.playingID, s.isAlarm = nil, "", false
+	}
+	if err != nil {
+		s.lastErr = err
+	}
+	s.mu.Unlock()
+
+	switch {
+	case err != nil:
+		// A player that dies mid-alarm is a real problem: log it loudly. The
+		// scheduler still holds the alarm active, so the big red button keeps
+		// working and the caller can retry.
+		s.log.Error("alarm player exited unexpectedly",
+			"sound", soundID, "was_alarm", isAlarm, "error", err)
+	case current:
+		s.log.Info("alarm audio finished", "sound", soundID, "by_limit", stoppedByLimit)
 	}
 }
 
