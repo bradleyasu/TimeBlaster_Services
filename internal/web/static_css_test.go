@@ -165,3 +165,38 @@ func TestSettingsTogglesUseTheSwitch(t *testing.T) {
 		}
 	}
 }
+
+func TestEverySettingsControlSavesItself(t *testing.T) {
+	// There is no save button any more, so a control that nobody listens to is
+	// a setting the user can change and lose. Nothing errors in that case --
+	// the control moves, and the value silently never reaches the device.
+	html := readStatic(t, "index.html")
+	js := readStatic(t, "app.js")
+
+	if strings.Contains(html, "btn-save-settings") || strings.Contains(js, "btn-save-settings") {
+		t.Error("the save button is gone from the markup but still referenced")
+	}
+
+	// Every control in the settings panel, by id.
+	panel := html[strings.Index(html, `id="tab-settings"`):]
+	if end := strings.Index(panel, "</section>"); end > 0 {
+		panel = panel[:end]
+	}
+	ids := regexp.MustCompile(`id="(set-[a-z0-9-]+)"`).FindAllStringSubmatch(panel, -1)
+	if len(ids) == 0 {
+		t.Fatal("found no settings controls; has the markup changed?")
+	}
+
+	for _, m := range ids {
+		id := m[1]
+		// Either in the change-listener list, or wired on its own line.
+		listed := strings.Contains(js, "'"+id+"'")
+		if !listed {
+			t.Errorf("%s is in the settings panel but never referenced in app.js, "+
+				"so changing it would be silently discarded", id)
+		}
+		if !strings.Contains(js, "addEventListener('change'") {
+			t.Fatal("no change listeners are wired at all")
+		}
+	}
+}

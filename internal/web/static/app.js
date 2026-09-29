@@ -590,8 +590,14 @@
     }).catch(fail);
   }
 
+  // savedSettings is the last state the daemon accepted. It is what a rejected
+  // change reverts to, and what supplies the timezone for changes made while
+  // that field is being typed into.
+  var savedSettings = null;
+
   function loadSettings() {
     return api('GET', 'api/settings').then(function (s) {
+      savedSettings = s;
       $('set-timezone').value = s.timezone || '';
       $('set-clock24').checked = !!s.clock_24h;
       $('set-display-on').checked = !!s.display_on;
@@ -601,18 +607,51 @@
     }).catch(fail);
   }
 
-  function saveSettings() {
-    api('PUT', 'api/settings', {
-      timezone: $('set-timezone').value.trim(),
+  // applySettings puts a settings document back into the controls, so a
+  // rejected change visibly snaps back rather than leaving the form showing
+  // something the device never accepted.
+  function applySettings(s) {
+    $('set-timezone').value = s.timezone || '';
+    $('set-clock24').checked = !!s.clock_24h;
+    $('set-display-on').checked = !!s.display_on;
+    $('set-overlay').checked = !!s.channel_overlay_enabled;
+    $('set-tv-audio').value = s.tv_audio_output || 'hdmi';
+    fillSoundSelect($('set-sound'), s.default_sound_id);
+  }
+
+  // saveSettings sends the whole document, because the API compares against
+  // the current state rather than patching fields. Building it from the
+  // controls rather than from savedSettings means two changes in quick
+  // succession both survive: each request carries the complete intent, so the
+  // later one cannot undo the earlier.
+  //
+  // The timezone is the exception. It is typed rather than chosen, so while it
+  // is being edited its value is half a word and would fail validation for the
+  // whole document. Until the field itself reports a change, the last accepted
+  // timezone is sent instead.
+  function saveSettings(includeTypedTimezone) {
+    var timezone = includeTypedTimezone
+      ? $('set-timezone').value.trim()
+      : (savedSettings ? savedSettings.timezone : $('set-timezone').value.trim());
+
+    return api('PUT', 'api/settings', {
+      timezone: timezone,
       clock_24h: $('set-clock24').checked,
       tv_audio_output: $('set-tv-audio').value,
       display_on: $('set-display-on').checked,
       default_sound_id: $('set-sound').value,
       channel_overlay_enabled: $('set-overlay').checked
-    }).then(function () {
-      toast('Settings saved');
+    }).then(function (s) {
+      if (s) {
+        savedSettings = s;
+        applySettings(s);
+      }
       return refresh();
-    }).catch(fail);
+    }).catch(function (e) {
+      fail(e);
+      // Put the controls back to what the device actually has.
+      if (savedSettings) applySettings(savedSettings);
+    });
   }
 
   function renderSettings() {
@@ -829,7 +868,14 @@
       api('POST', 'api/channels/clear').then(refresh).catch(fail);
     });
 
-    $('btn-save-settings').addEventListener('click', saveSettings);
+    // Every control saves itself. Matching the alarm list's switches, which
+    // have always worked this way: act on change, say nothing on success, and
+    // snap back with an explanation if the device refuses.
+    ['set-clock24', 'set-display-on', 'set-overlay', 'set-sound', 'set-tv-audio'].forEach(function (id) {
+      $(id).addEventListener('change', function () { saveSettings(false); });
+    });
+    // The timezone fires on commit -- blur or Enter -- not on every keystroke.
+    $('set-timezone').addEventListener('change', function () { saveSettings(true); });
     $('btn-stop-preview').addEventListener('click', function () {
       api('POST', 'api/sounds/preview/stop').catch(fail);
     });
