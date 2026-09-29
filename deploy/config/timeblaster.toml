@@ -211,7 +211,11 @@ default_sound_id = "alarm1"
 
 device_recheck_interval = "30s"
 # Caps a "test this sound" preview from the companion app.
-test_duration = "10s"
+#
+# A cap rather than the whole file: alarm sounds run for minutes, and without
+# one the only way out of a preview is the stop button. Long enough to judge a
+# sound in the room, short enough not to have to interrupt it.
+test_duration = "60s"
 
 [ersatztv]
 base_url = "http://127.0.0.1:8409"

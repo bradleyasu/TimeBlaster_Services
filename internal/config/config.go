@@ -239,6 +239,9 @@ type Audio struct {
 	// DeviceRecheckInterval is how often an unavailable USB speaker is re-probed.
 	DeviceRecheckInterval Duration `toml:"device_recheck_interval"`
 	// TestDuration bounds a "test this sound" playback from the companion app.
+	//
+	// A cap rather than the whole file: alarm sounds run for minutes, and
+	// without one the only way out of a preview is the stop button.
 	TestDuration Duration `toml:"test_duration"`
 }
 
@@ -463,7 +466,7 @@ func Default() Config {
 			ExtraPlayerArgs:       []string{},
 			DefaultSoundID:        "alarm1",
 			DeviceRecheckInterval: Dur(30 * time.Second),
-			TestDuration:          Dur(10 * time.Second),
+			TestDuration:          Dur(60 * time.Second),
 		},
 		ErsatzTV: ErsatzTV{
 			BaseURL:         "http://127.0.0.1:8409",
