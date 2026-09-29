@@ -503,6 +503,29 @@ install_udev() {
   ok "installed ${dst} (creates /dev/timeblaster-nano)"
 }
 
+install_etv_offline_image() {
+  step "Installing the ErsatzTV offline-screen image"
+
+  local img_src="${SCRIPT_DIR}/deploy/assets/ersatztv-offline.png"
+  local img_dst="${STATE_DIR}/assets/ersatztv-offline.png"
+  local bin_src="${SCRIPT_DIR}/deploy/bin/timeblaster-etv-offline-image"
+  local bin_dst="/usr/local/bin/timeblaster-etv-offline-image"
+
+  if [[ ! -f "$img_src" ]]; then
+    skip "no offline image shipped"
+    return
+  fi
+
+  run install -d -m 0755 -o "$SERVICE_USER" -g "$SERVICE_USER" "${STATE_DIR}/assets"
+  if [[ -f "$img_dst" ]] && cmp -s "$img_src" "$img_dst"; then
+    skip "offline image is already current"
+  else
+    run install -m 0644 -o "$SERVICE_USER" -g "$SERVICE_USER" "$img_src" "$img_dst"
+  fi
+  run install -m 0755 -o root -g root "$bin_src" "$bin_dst"
+  ok "installed ${img_dst} (applied by ersatztv.service on every start)"
+}
+
 install_modules_load() {
   step "Ensuring the USB serial driver loads at boot"
 
@@ -1278,6 +1301,7 @@ main() {
   install_assets
   install_udev
   install_modules_load
+  install_etv_offline_image
   configure_hostname
   configure_console
   install_ersatztv

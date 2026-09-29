@@ -30,6 +30,16 @@ Environment=ERSATZTV_TRANSCODE_DIRECTORY=/var/lib/ersatztv/transcode
 Environment=DOTNET_BUNDLE_EXTRACT_BASE_DIR=/var/lib/ersatztv/.net
 
 ExecStart=/opt/ersatztv/ErsatzTV
+# ErsatzTV re-extracts its own "Channel is Offline" background from the binary
+# on every start, about a second before it begins serving. This waits for it to
+# be up -- which is strictly after that -- and puts the Timeblaster's image
+# back. It never fails the unit: a cosmetic image is not worth taking the
+# television down for.
+# "+" runs it as root rather than as User=ersatztv: the image lives under
+# /var/lib/timeblaster, which is drwxr-x--- and so invisible to this unit's
+# user, and installing it needs to set ownership. "-" keeps a failure from
+# taking the unit down.
+ExecStartPost=+-/usr/local/bin/timeblaster-etv-offline-image
 
 Restart=on-failure
 RestartSec=10
