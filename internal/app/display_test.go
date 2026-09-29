@@ -320,13 +320,22 @@ func TestTVAudioOutputSetting(t *testing.T) {
 		t.Errorf("saved %q", saved.TVAudioOutput)
 	}
 
-	// mpv was pointed at the speaker by card name.
+	// mpv must be pointed at the SPEAKER's card specifically. Checking only for
+	// "CARD=" was useless: falling through to HDMI also produces a CARD= string,
+	// so the assertion held whether the speaker branch ran or not.
+	speakerCard := h.app.audio.CardID()
+	if speakerCard == "" {
+		t.Fatal("the harness has no resolved speaker, so this proves nothing")
+	}
 	last, ok := lastSetProperty(h.player, "audio-device")
 	if !ok {
 		t.Fatal("mpv was never told which audio device to use")
 	}
-	if !strings.Contains(last, "CARD=") {
-		t.Errorf("the device must be named, not numbered: %q", last)
+	if !strings.Contains(last, "CARD="+speakerCard) {
+		t.Errorf("expected the speaker card %q, got %q", speakerCard, last)
+	}
+	if strings.Contains(last, "vc4hdmi") {
+		t.Errorf("selecting the speaker still routed to HDMI: %q", last)
 	}
 
 	// And back to HDMI.
