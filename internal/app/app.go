@@ -411,7 +411,14 @@ func (a *App) initHardware(deps Deps) {
 	// half-minute after boot.
 	var clockSync system.ClockSync = system.AlwaysSynced{}
 	if a.cfg.Serial.WaitForTimeSync {
-		clockSync = system.TimesyncdMarker{}
+		// Either proof will do: NTP having confirmed the time, or a hardware
+		// clock that carried a real date through the power cut. Requiring the
+		// first alone made a Pi with a fitted RTC battery -- which knows the
+		// time at boot -- sit on the loading animation for half a minute.
+		clockSync = system.AnyClockSync{
+			system.TimesyncdMarker{},
+			system.RTCClock{},
+		}
 	}
 	a.link = hardware.NewLink(linkCfg, hardware.Deps{
 		Opener: opener, Clock: a.clock, Logger: a.log.With("component", "nano"),
