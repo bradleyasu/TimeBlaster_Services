@@ -57,9 +57,17 @@ func (a *App) tvAudioDevice(choice string) string {
 
 // applyTVAudioOutput points mpv at the chosen output.
 //
-// Set as a property rather than a launch argument so the choice takes effect
-// without restarting playback, and re-applied whenever mpv reconnects because
-// a fresh process starts back on its own default.
+// Setting the property is not enough on its own for a stream that is already
+// playing: when an audio output fails to open -- an HDMI sink with no speakers
+// behind it, say -- mpv gives up on audio for that playback session and leaves
+// the track deselected. Pointing it at a working device afterwards changes
+// nothing, and even selecting the track by hand produces no sound, because the
+// output object was never created. Only reloading the file rebuilds the audio
+// chain, which is why callers that change the setting reload afterwards.
+//
+// Re-applied whenever mpv reconnects, because a fresh process starts back on
+// its own default. That path needs no reload of its own: the device is set
+// before anything is loaded.
 func (a *App) applyTVAudioOutput(ctx context.Context) {
 	if a.tvPlayer == nil {
 		return
@@ -176,6 +184,13 @@ func (a *App) UpdateSettings(ctx context.Context, s web.Settings) (web.Settings,
 			return web.Settings{}, err
 		}
 		a.applyTVAudioOutput(ctx)
+		// Reload whatever is on screen so the new device is actually used. See
+		// applyTVAudioOutput: a stream that is already playing keeps its dead
+		// audio output until the file is loaded again.
+		if a.media != nil {
+			a.media.RestorePlayback(ctx)
+		}
+		a.log.Info("television audio output changed", "output", s.TVAudioOutput)
 	}
 
 	if s.OverlayEnabled != current.OverlayEnabled {

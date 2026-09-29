@@ -355,6 +355,28 @@ func TestTVAudioOutputSetting(t *testing.T) {
 	}
 }
 
+func TestChangingTVAudioOutputReloadsPlayback(t *testing.T) {
+	// Setting the property alone does nothing to a stream that is already
+	// playing. When an audio output fails to open -- an HDMI sink with no
+	// speakers behind it -- mpv gives up on audio for that session and leaves
+	// the track deselected; pointing it somewhere working afterwards changes
+	// nothing, and even selecting the track by hand stays silent, because the
+	// output object was never created. Only a reload rebuilds the audio chain.
+	h := newHarness(t, nil)
+	ctx := context.Background()
+	h.player.Reset()
+
+	cur := h.app.Settings()
+	cur.TVAudioOutput = config.TVAudioSpeaker
+	if _, err := h.app.UpdateSettings(ctx, cur); err != nil {
+		t.Fatalf("UpdateSettings: %v", err)
+	}
+
+	if n := len(h.player.CallsNamed("loadfile")); n == 0 {
+		t.Error("playback was not reloaded, so the new device will not be used")
+	}
+}
+
 // lastSetProperty returns the most recent value mpv was given for a property.
 func lastSetProperty(p *mpv.Fake, name string) (string, bool) {
 	calls := p.CallsNamed("set_property")
