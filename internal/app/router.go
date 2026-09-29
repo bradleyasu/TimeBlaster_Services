@@ -41,6 +41,17 @@ func (a *App) OnChannelSelect(ev input.ChannelSelect) {
 // Physical=true marks the knob as authoritative, which is what stops any
 // software-set value from surviving past the next time someone touches it.
 func (a *App) OnVolumeChange(ev input.VolumeChange) {
+	// Show the level on the seven-segment display while the knob is moving, the
+	// way a stereo does, then let it fall back to the clock. Only for a physical
+	// turn: a change from the companion app would otherwise flash the clock at
+	// someone who is not standing in front of it.
+	//
+	// Each turn re-claims the display and restarts the timer, so a slow sweep
+	// tracks the knob and the clock returns once it stops.
+	if ev.Physical {
+		a.flashNanoText(nanoVolumeText(ev.Percent), a.cfg.General.VolumeBanner.Duration)
+	}
+
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -271,6 +282,21 @@ func (a *App) ChannelChanged(ch *ersatztv.Channel) {
 		a.flashNanoText(nanoChannelText(ch.Number), a.cfg.General.ChannelBanner.Duration)
 	}
 	a.publish(state.NewEvent(state.EventChannelChanged, ch))
+}
+
+// nanoVolumeText renders a volume percentage for the seven-segment display.
+//
+// "V" and a right-aligned number is exactly the four cells available, for every
+// value from 0 to 100, so nothing needs a special case. V is used rather than U
+// because this font draws it with a pointed base, which no digit resembles.
+func nanoVolumeText(percent int) string {
+	if percent < 0 {
+		percent = 0
+	}
+	if percent > 100 {
+		percent = 100
+	}
+	return fmt.Sprintf("V%3d", percent)
 }
 
 // nanoChannelText renders a channel number for the seven-segment display.

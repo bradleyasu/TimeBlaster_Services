@@ -42,6 +42,18 @@ display_on = true
 # reading from the Nano selects the right channel within a second anyway.
 restore_channel_on_boot = false
 
+# How long the 7-segment display shows the alarm volume after the knob moves,
+# before falling back to the clock. It reads "V" and the percentage right
+# aligned -- "V  0", "V 44", "V100" -- which is exactly the four cells available
+# for every value, so nothing needs a special case.
+#
+# Only a physical turn of the knob shows it. A change made in the companion app
+# would otherwise flash the clock at someone who is not looking at the device.
+#
+# Each turn restarts the timer, so a slow sweep tracks the knob and the clock
+# comes back once it stops. Set to "0s" to leave the clock up throughout.
+volume_banner_duration = "1.5s"
+
 # How long the 7-segment display shows the channel number after a channel
 # change, the way a television does, before falling back to the clock.
 #

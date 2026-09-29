@@ -91,6 +91,14 @@ type General struct {
 	// physical position is the truth, and the first reading from the Nano will
 	// select the right channel within a second anyway.
 	RestoreChannelOnBoot bool `toml:"restore_channel_on_boot"`
+	// VolumeBanner is how long the seven-segment display shows the alarm volume
+	// after the knob moves, before returning to the clock.
+	//
+	// Only a physical turn shows it. A change made in the companion app would
+	// otherwise flash the clock at someone who is not looking at the device.
+	//
+	// Zero turns it off.
+	VolumeBanner Duration `toml:"volume_banner_duration"`
 	// ChannelBanner is how long the seven-segment display shows the channel
 	// number ("Ch.02") after a channel change before returning to the clock.
 	//
@@ -404,6 +412,7 @@ func Default() Config {
 			DisplayOn:            true,
 			RestoreChannelOnBoot: false,
 			ChannelBanner:        Dur(2 * time.Second),
+			VolumeBanner:         Dur(1500 * time.Millisecond),
 		},
 		Logging: Logging{
 			Level:  "info",

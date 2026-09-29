@@ -8,6 +8,7 @@ import (
 	"github.com/bradsheets/timeblaster/internal/config"
 	"github.com/bradsheets/timeblaster/internal/ersatztv"
 	"github.com/bradsheets/timeblaster/internal/hardware"
+	"github.com/bradsheets/timeblaster/internal/input"
 	"github.com/bradsheets/timeblaster/internal/protocol"
 	"github.com/bradsheets/timeblaster/internal/wifi"
 )
@@ -233,5 +234,64 @@ func TestChangingTheClockFormatReachesTheNano(t *testing.T) {
 	}
 	if n := len(h.nano.CommandsOfKind("clock-24h")); n != 0 {
 		t.Errorf("an unchanged setting re-sent %d commands", n)
+	}
+}
+
+func TestTurningTheKnobShowsTheVolumeThenReturnsToTheClock(t *testing.T) {
+	h := newHarness(t, func(c *config.Config) {
+		c.General.VolumeBanner = config.Dur(1500 * time.Millisecond)
+	})
+	h.nano.Reset()
+
+	h.app.OnVolumeChange(input.VolumeChange{Percent: 44, Physical: true})
+
+	waitForDisplay(t, h.nano, "display-text", 1)
+	if got := h.nano.CommandsOfKind("display-text")[0].Text; got != "V 44" {
+		t.Errorf("display text: %q, want %q", got, "V 44")
+	}
+	if n := len(h.nano.CommandsOfKind("display-clock")); n != 0 {
+		t.Fatal("returned to the clock before the banner expired")
+	}
+
+	waitForWaiters(t, h, 1)
+	h.clock.Advance(1500 * time.Millisecond)
+	waitForDisplay(t, h.nano, "display-clock", 1)
+}
+
+func TestAVolumeChangeFromTheAppDoesNotTouchTheDisplay(t *testing.T) {
+	// Nobody is standing in front of the device when the change came from a
+	// phone, so flashing the clock at them serves no one.
+	h := newHarness(t, nil)
+	h.nano.Reset()
+
+	h.app.OnVolumeChange(input.VolumeChange{Percent: 44, Physical: false})
+	time.Sleep(50 * time.Millisecond)
+
+	if n := len(h.nano.CommandsOfKind("display-text")); n != 0 {
+		t.Errorf("a software volume change wrote to the display %d time(s)", n)
+	}
+}
+
+func TestNanoVolumeTextAlwaysFitsFourCells(t *testing.T) {
+	// Four cells is all there is. "V" plus a right-aligned number covers every
+	// value from 0 to 100 exactly, which is why there are no special cases.
+	for _, tc := range []struct {
+		percent int
+		want    string
+	}{
+		{0, "V  0"},
+		{5, "V  5"},
+		{44, "V 44"},
+		{100, "V100"},
+		{-10, "V  0"}, // clamped rather than rendered as "V -10"
+		{150, "V100"},
+	} {
+		got := nanoVolumeText(tc.percent)
+		if got != tc.want {
+			t.Errorf("nanoVolumeText(%d) = %q, want %q", tc.percent, got, tc.want)
+		}
+		if len(got) != 4 {
+			t.Errorf("nanoVolumeText(%d) = %q, which is %d cells, not 4", tc.percent, got, len(got))
+		}
 	}
 }
