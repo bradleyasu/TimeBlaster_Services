@@ -149,18 +149,21 @@ type Health struct {
 
 // HealthDetails carries the few values worth seeing alongside the summary.
 type HealthDetails struct {
-	NanoConnected       bool   `json:"nano_connected"`
-	NanoLive            bool   `json:"nano_live"`
-	ErsatzTVReachable   bool   `json:"ersatztv_reachable"`
-	PlayerAlive         bool   `json:"tv_player_alive"`
-	AlarmDeviceReady    bool   `json:"alarm_audio_device_available"`
-	AlarmSubsystemReady bool   `json:"alarm_subsystem_healthy"`
-	WiFiHelperReachable bool   `json:"wifi_helper_reachable"`
-	WiFiMode            string `json:"wifi_mode"`
-	CurrentChannel      string `json:"current_channel,omitempty"`
-	ChannelCount        int    `json:"channel_count"`
-	AlarmCount          int    `json:"alarm_count"`
-	AlarmRinging        bool   `json:"alarm_ringing"`
+	NanoConnected       bool    `json:"nano_connected"`
+	NanoLive            bool    `json:"nano_live"`
+	DiskPath            string  `json:"disk_path,omitempty"`
+	DiskFreeMB          int64   `json:"disk_free_mb"`
+	DiskUsedPercent     float64 `json:"disk_used_percent"`
+	ErsatzTVReachable   bool    `json:"ersatztv_reachable"`
+	PlayerAlive         bool    `json:"tv_player_alive"`
+	AlarmDeviceReady    bool    `json:"alarm_audio_device_available"`
+	AlarmSubsystemReady bool    `json:"alarm_subsystem_healthy"`
+	WiFiHelperReachable bool    `json:"wifi_helper_reachable"`
+	WiFiMode            string  `json:"wifi_mode"`
+	CurrentChannel      string  `json:"current_channel,omitempty"`
+	ChannelCount        int     `json:"channel_count"`
+	AlarmCount          int     `json:"alarm_count"`
+	AlarmRinging        bool    `json:"alarm_ringing"`
 }
 
 // Component health values.

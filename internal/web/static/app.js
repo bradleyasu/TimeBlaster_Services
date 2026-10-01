@@ -721,6 +721,17 @@
     cleanup.then(function () { location.reload(); }, function () { location.reload(); });
   }
 
+  // diskFreeText renders free space in the largest sensible unit. Returns an
+  // empty string when the daemon could not read it, so the row falls back to
+  // the plain status rather than claiming "0 MB free".
+  function diskFreeText(details) {
+    if (!details || typeof details.disk_free_mb !== 'number') return '';
+    var mb = details.disk_free_mb;
+    if (mb <= 0) return '';
+    if (mb >= 1024) return (mb / 1024).toFixed(1) + ' GB';
+    return mb + ' MB';
+  }
+
   function renderSystem() {
     api('GET', 'api/health').then(function (h) {
       var el = $('health');
@@ -735,9 +746,16 @@
       Object.keys(h.components).sort().forEach(function (k) {
         var row = document.createElement('div');
         row.className = 'health-row';
+        // "disk OK" says less than the number does, and the number is the whole
+        // reason the component exists, so it is shown alongside the state.
+        var label = h.components[k].toUpperCase();
+        if (k === 'disk') {
+          var free = diskFreeText(h.details);
+          if (free) label = free + ' free \u00b7 ' + label;
+        }
         row.innerHTML = '<span class="name">' + escapeHTML(k) + '</span>' +
           '<span class="value ' + cssStatus(h.components[k]) + '">' +
-          escapeHTML(h.components[k].toUpperCase()) + '</span>';
+          escapeHTML(label) + '</span>';
         el.appendChild(row);
       });
 

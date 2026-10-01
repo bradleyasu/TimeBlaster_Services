@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"math"
 	"time"
 
 	"github.com/bradsheets/timeblaster/internal/ersatztv"
@@ -104,6 +105,46 @@ func (a *App) wifiStatus() wifi.Status {
 	return st
 }
 
+// diskDetail carries the numbers the health document reports.
+type diskDetail struct {
+	freeMB      int64
+	usedPercent float64
+}
+
+// diskHealth reports free space on the filesystem the device depends on.
+//
+// Running out is not a dramatic failure: SQLite stops being able to checkpoint,
+// ErsatzTV stops being able to write, and nothing says why. The point of this
+// component is to make the decline visible while there is still room to act.
+func (a *App) diskHealth() (string, diskDetail) {
+	path := a.cfg.Storage.DiskPath
+	if path == "" {
+		return state.StatusUnknown, diskDetail{}
+	}
+	st, err := a.disk.Stat(path)
+	if err != nil {
+		// Not knowing is not the same as being full, and must not read as either
+		// healthy or out of space.
+		a.log.Debug("could not read free space", "path", path, "error", err)
+		return state.StatusUnknown, diskDetail{}
+	}
+
+	const mib = 1024 * 1024
+	d := diskDetail{
+		freeMB:      int64(st.AvailBytes / mib),
+		usedPercent: math.Round(st.UsedPercent()*10) / 10,
+	}
+
+	switch {
+	case a.cfg.Storage.DiskDownBelowMB > 0 && d.freeMB < a.cfg.Storage.DiskDownBelowMB:
+		return state.StatusDown, d
+	case a.cfg.Storage.DiskDegradedBelowMB > 0 && d.freeMB < a.cfg.Storage.DiskDegradedBelowMB:
+		return state.StatusDegraded, d
+	default:
+		return state.StatusOK, d
+	}
+}
+
 // Health builds the compact component report served at /api/health.
 //
 // The classification rule encodes the project's priority order: only an impaired
@@ -148,6 +189,9 @@ func (a *App) Health() state.Health {
 	} else {
 		components["alarm_sounds"] = state.StatusOK
 	}
+
+	diskStatus, diskDetail := a.diskHealth()
+	components["disk"] = diskStatus
 
 	// Liveness, not Connected: a wedged Nano holds the port open indefinitely,
 	// and reporting that as OK hid a board that had been silent for 15 hours
@@ -206,6 +250,9 @@ func (a *App) Health() state.Health {
 		Details: state.HealthDetails{
 			NanoConnected:       hw.Connected,
 			NanoLive:            hw.Live,
+			DiskFreeMB:          diskDetail.freeMB,
+			DiskUsedPercent:     diskDetail.usedPercent,
+			DiskPath:            a.cfg.Storage.DiskPath,
 			ErsatzTVReachable:   mediaStatus.ErsatzTVReachable,
 			PlayerAlive:         mediaStatus.PlayerAlive,
 			AlarmDeviceReady:    audioHealth.DeviceAvailable,

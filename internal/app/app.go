@@ -43,6 +43,7 @@ type Deps struct {
 	AudioPlayer audio.Player
 	WiFi        wifi.Manager
 	ALSAProbe   *system.ALSAProbe
+	Disk        system.Disk
 }
 
 // App is the assembled Timeblaster daemon.
@@ -50,6 +51,7 @@ type App struct {
 	cfg     config.Config
 	log     *slog.Logger
 	clock   system.Clock
+	disk    system.Disk
 	version string
 
 	store     storage.Store
@@ -180,11 +182,16 @@ func New(cfg config.Config, log *slog.Logger, version string, deps Deps) (*App, 
 	if runner == nil {
 		runner = system.ExecRunner{}
 	}
+	disk := deps.Disk
+	if disk == nil {
+		disk = system.Statfs{}
+	}
 
 	a := &App{
 		cfg:       cfg,
 		log:       log,
 		clock:     clock,
+		disk:      disk,
 		version:   version,
 		sup:       newSupervisor(log),
 		tracker:   state.NewTracker(version, cfg.General.Hostname, clock.Now()),

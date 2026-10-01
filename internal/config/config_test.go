@@ -166,6 +166,10 @@ func TestValidateFieldRanges(t *testing.T) {
 		{"overlay bad colour", func(c *Config) { c.Overlay.Color = "green" }, "color"},
 		{"overlay bad position", func(c *Config) { c.Overlay.Position = "middle-ish" }, "position"},
 		{"ssid too long", func(c *Config) { c.WiFi.SetupSSID = strings.Repeat("x", 33) }, "setup_ssid"},
+		// Inverted disk thresholds would mean the warning only ever appears
+		// after the fault it was meant to precede.
+		{"disk thresholds inverted", func(c *Config) { c.Storage.DiskDownBelowMB = 99999 }, "disk_down_below_mb"},
+		{"negative disk threshold", func(c *Config) { c.Storage.DiskDegradedBelowMB = -1 }, "disk"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

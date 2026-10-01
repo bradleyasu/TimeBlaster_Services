@@ -126,6 +126,21 @@ type Storage struct {
 	// RuntimeDir holds sockets and generated files. systemd provides it via
 	// RuntimeDirectory=timeblaster.
 	RuntimeDir string `toml:"runtime_dir"`
+
+	// DiskPath is the filesystem watched for free space. It defaults to the
+	// directory holding the database, which on this device is the same
+	// filesystem as the media library, so one check covers both.
+	DiskPath string `toml:"disk_path"`
+	// DiskDegradedBelowMB and DiskDownBelowMB are the free-space thresholds for
+	// the "disk" health component, in mebibytes.
+	//
+	// An always-on appliance that fills its disk fails in confusing ways --
+	// SQLite cannot checkpoint, ErsatzTV cannot write its database -- and
+	// nothing announces why. Reporting it as a health component turns a silent
+	// decline into something the status page shows well before it matters. Set
+	// either to zero to disable that threshold.
+	DiskDegradedBelowMB int64 `toml:"disk_degraded_below_mb"`
+	DiskDownBelowMB     int64 `toml:"disk_down_below_mb"`
 }
 
 // Serial configures the link to the Arduino Nano.
@@ -438,6 +453,14 @@ func Default() Config {
 			DatabasePath:   "/var/lib/timeblaster/timeblaster.db",
 			AlarmSoundsDir: "/var/lib/timeblaster/alarm-sounds",
 			RuntimeDir:     "/run/timeblaster",
+			DiskPath:       "/var/lib/timeblaster",
+			// 5 GiB is early enough to act on without being alarmist: the device
+			// accumulates on the order of a hundred megabytes a year by itself,
+			// so crossing this means something unusual is happening.
+			DiskDegradedBelowMB: 5120,
+			// Below 1 GiB, SQLite checkpoints and ErsatzTV's database are at
+			// real risk, so this is a fault rather than a warning.
+			DiskDownBelowMB: 1024,
 		},
 		Serial: Serial{
 			Device: "",
@@ -641,6 +664,16 @@ func (c Config) Validate() error {
 	}
 	if c.Storage.AlarmSoundsDir == "" {
 		add("storage.alarm_sounds_dir must not be empty")
+	}
+	if c.Storage.DiskDegradedBelowMB < 0 || c.Storage.DiskDownBelowMB < 0 {
+		add("storage disk thresholds must not be negative")
+	}
+	if c.Storage.DiskDownBelowMB > c.Storage.DiskDegradedBelowMB &&
+		c.Storage.DiskDegradedBelowMB > 0 {
+		// Otherwise the fault threshold is never reached before the warning one,
+		// which reads as a warning that only ever appears after the fault.
+		add("storage.disk_down_below_mb (%d) must not exceed storage.disk_degraded_below_mb (%d)",
+			c.Storage.DiskDownBelowMB, c.Storage.DiskDegradedBelowMB)
 	}
 
 	// serial

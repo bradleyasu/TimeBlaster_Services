@@ -876,3 +876,101 @@ func TestRapidKnobMovementAppliesTheFinalPosition(t *testing.T) {
 		t.Errorf("a stale selection won the race: %+v", cur)
 	}
 }
+
+// newHarnessWithDisk builds a harness whose free-space answers the test picks.
+// diskHealth reads the probe when Health is called, so substituting it after
+// construction is enough.
+func newHarnessWithDisk(t *testing.T, disk system.Disk) *harness {
+	t.Helper()
+	h := newHarness(t, nil)
+	h.app.disk = disk
+	return h
+}
+
+func TestDiskHealthThresholds(t *testing.T) {
+	const mib = 1024 * 1024
+	// The harness has no Nano and no ErsatzTV, so overall health is degraded
+	// whatever the disk says. Overall's reaction is covered separately below.
+	for _, tc := range []struct {
+		name   string
+		freeMB int64
+		want   string
+	}{
+		// Defaults are 5120 MiB degraded, 1024 MiB down.
+		{"plenty of room", 15_000, state.StatusOK},
+		{"just above the warning", 5_200, state.StatusOK},
+		{"below the warning", 4_000, state.StatusDegraded},
+		{"below the fault threshold", 500, state.StatusDown},
+		{"completely full", 0, state.StatusDown},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			disk := &system.FakeDisk{Stat_: system.DiskStat{
+				TotalBytes: 100_000 * mib,
+				AvailBytes: uint64(tc.freeMB) * mib,
+			}}
+			h := newHarnessWithDisk(t, disk)
+
+			got := h.app.Health()
+			if got.Components["disk"] != tc.want {
+				t.Errorf("disk component = %q, want %q", got.Components["disk"], tc.want)
+			}
+			if got.Details.DiskFreeMB != tc.freeMB {
+				t.Errorf("reported %d MB free, want %d", got.Details.DiskFreeMB, tc.freeMB)
+			}
+			// The watched path must be the one configured, or the check is
+			// measuring a filesystem nobody cares about.
+			if len(disk.Paths) == 0 || disk.Paths[0] != h.app.cfg.Storage.DiskPath {
+				t.Errorf("probed %v, want %q", disk.Paths, h.app.cfg.Storage.DiskPath)
+			}
+		})
+	}
+}
+
+func TestAFullDiskDegradesOverallHealth(t *testing.T) {
+	// A disk warning nobody surfaces is no better than no warning, so the
+	// component has to reach the overall status the status page shows.
+	healthy := map[string]string{"nano": state.StatusOK, "ersatztv": state.StatusOK}
+	if got := state.Overall(healthy, true); got != state.OverallOK {
+		t.Fatalf("baseline overall = %q, want %q", got, state.OverallOK)
+	}
+	for _, st := range []string{state.StatusDegraded, state.StatusDown} {
+		withDisk := map[string]string{"nano": state.StatusOK, "ersatztv": state.StatusOK, "disk": st}
+		if got := state.Overall(withDisk, true); got != state.OverallDegraded {
+			t.Errorf("disk %q gave overall %q, want %q", st, got, state.OverallDegraded)
+		}
+	}
+	// An unreadable disk must not drag the device down on its own.
+	unknown := map[string]string{"nano": state.StatusOK, "ersatztv": state.StatusOK, "disk": state.StatusUnknown}
+	if got := state.Overall(unknown, true); got != state.OverallOK {
+		t.Errorf("unknown disk gave overall %q, want %q", got, state.OverallOK)
+	}
+}
+
+func TestDiskHealthIsUnknownWhenItCannotBeRead(t *testing.T) {
+	// Not knowing must not read as healthy, which would hide a real problem, nor
+	// as full, which would raise a false one.
+	h := newHarnessWithDisk(t, &system.FakeDisk{Err: errors.New("statfs: no")})
+
+	got := h.app.Health()
+	if got.Components["disk"] != state.StatusUnknown {
+		t.Errorf("disk component = %q, want %q", got.Components["disk"], state.StatusUnknown)
+	}
+	if got.Details.DiskFreeMB != 0 {
+		t.Errorf("invented a free-space figure: %d", got.Details.DiskFreeMB)
+	}
+}
+
+func TestDiskHealthCanBeDisabled(t *testing.T) {
+	// An installation that does not want the check should get OK rather than a
+	// permanent warning it cannot clear.
+	disk := &system.FakeDisk{Stat_: system.DiskStat{TotalBytes: 1 << 30, AvailBytes: 1}}
+	h := newHarness(t, func(c *config.Config) {
+		c.Storage.DiskDegradedBelowMB = 0
+		c.Storage.DiskDownBelowMB = 0
+	})
+	h.app.disk = disk
+
+	if got := h.app.Health().Components["disk"]; got != state.StatusOK {
+		t.Errorf("disk component = %q, want %q with thresholds disabled", got, state.StatusOK)
+	}
+}
