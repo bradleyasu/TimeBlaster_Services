@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -224,10 +225,16 @@ func TestLinkConnectsAndResyncs(t *testing.T) {
 		t.Errorf("time sync payload: %d, %v", unix, err)
 	}
 
-	ups, _ := f.lifecycle.counts()
-	if ups != 1 {
-		t.Errorf("LinkUp calls: %d", ups)
+	// Opening the port is not the link coming up: the Nano has to answer first.
+	if ups, _ := f.lifecycle.counts(); ups != 0 {
+		t.Errorf("LinkUp was announced before the Nano answered: %d", ups)
 	}
+	nano.send(protocol.Ping(1, time.Second))
+	waitUntil(t, "LinkUp", func() bool {
+		ups, _ := f.lifecycle.counts()
+		return ups == 1
+	})
+
 	st := f.link.Status()
 	if !st.Connected || st.Device == "" {
 		t.Errorf("status: %+v", st)
@@ -329,6 +336,13 @@ func TestLinkReconnectsAfterDisconnect(t *testing.T) {
 	f, nanos := newLinkFixture(t, cfg, 2)
 	waitUntil(t, "first connection", f.link.Connected)
 
+	// The link only counts as up once the Nano has spoken.
+	newNanoSide(t, nanos[0]).send(protocol.Ping(1, time.Second))
+	waitUntil(t, "first LinkUp", func() bool {
+		ups, _ := f.lifecycle.counts()
+		return ups == 1
+	})
+
 	// Pull the cable.
 	nanos[0].Close()
 	waitUntil(t, "disconnect", func() bool { return !f.link.Connected() })
@@ -341,11 +355,12 @@ func TestLinkReconnectsAfterDisconnect(t *testing.T) {
 
 	nano := newNanoSide(t, nanos[1])
 	nano.expect(protocol.TypeTime, 3*time.Second) // resync on the new session
+	nano.send(protocol.Ping(2, 2*time.Second))
 
-	ups, downs := f.lifecycle.counts()
-	if ups != 2 || downs != 1 {
-		t.Errorf("lifecycle: %d up, %d down", ups, downs)
-	}
+	waitUntil(t, "second LinkUp", func() bool {
+		ups, downs := f.lifecycle.counts()
+		return ups == 2 && downs == 1
+	})
 	if got := f.link.Status().Reconnects; got != 1 {
 		t.Errorf("reconnect count: %d", got)
 	}
@@ -697,4 +712,160 @@ func TestLinkLivenessResetsAcrossAReconnect(t *testing.T) {
 	if f.link.Live() {
 		t.Error("a reconnected but silent Nano was reported live")
 	}
+}
+
+// capturingLogger records log records so a test can assert on log volume.
+type capturingLogger struct {
+	mu   sync.Mutex
+	recs []slog.Record
+}
+
+func (c *capturingLogger) Enabled(context.Context, slog.Level) bool { return true }
+func (c *capturingLogger) Handle(_ context.Context, r slog.Record) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.recs = append(c.recs, r.Clone())
+	return nil
+}
+func (c *capturingLogger) WithAttrs([]slog.Attr) slog.Handler { return c }
+func (c *capturingLogger) WithGroup(string) slog.Handler      { return c }
+
+// countAtLeast returns how many records at or above level mention substr.
+func (c *capturingLogger) countAtLeast(level slog.Level, substr string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n := 0
+	for _, r := range c.recs {
+		if r.Level >= level && strings.Contains(r.Message, substr) {
+			n++
+		}
+	}
+	return n
+}
+
+func TestAWedgedNanoDoesNotFillTheJournal(t *testing.T) {
+	// The incident this guards: a Nano that opened fine but never transmitted
+	// produced 39478 journal lines overnight, six per reconnect cycle, none of
+	// them saying anything the first few had not.
+	cfg := DefaultConfig()
+	cfg.ReconnectMin = time.Millisecond
+	cfg.ReconnectMax = time.Millisecond
+	cfg.HeartbeatTimeout = 2 * time.Second
+
+	// Many pipes, all of which open cleanly and then say nothing at all --
+	// exactly how the wedged board behaved.
+	const cycles = 20
+	var piEnds []serialport.Transport
+	var nanoPipes []*serialport.Pipe
+	for range cycles {
+		pi, nano := serialport.NewPipePair()
+		piEnds = append(piEnds, pi)
+		nanoPipes = append(nanoPipes, nano)
+	}
+
+	cap := &capturingLogger{}
+	clk := system.NewFakeClock(time.Date(2026, 10, 1, 8, 0, 0, 0, time.UTC))
+	life := newRecordingLifecycle()
+	link := NewLink(cfg, Deps{
+		Opener: serialport.NewPipeOpener(piEnds...), Clock: clk,
+		Logger: slog.New(cap), Observer: newRecordingObserver(), Lifecycle: life,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); _ = link.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Error("link Run did not stop")
+		}
+	})
+
+	// Drive the flap: each session dies on the heartbeat, then the backoff and
+	// the next open happen on the fake clock.
+	for i := range cycles - 1 {
+		waitUntil(t, "session to open", link.Connected)
+		nanoPipes[i].Close()
+		waitUntil(t, "session to end", func() bool { return !link.Connected() })
+		waitUntil(t, "backoff timer", func() bool { return clk.Waiters() > 0 })
+		clk.Advance(time.Second)
+	}
+	waitUntil(t, "the flap to be recorded", func() bool {
+		return link.Status().Reconnects >= cycles-1
+	})
+
+	// A link that never came up must not be announced as up or down at all. Each
+	// pair cost two journal lines and a full snapshot refetch in every phone.
+	if ups, downs := life.counts(); ups != 0 || downs != 0 {
+		t.Errorf("a Nano that never answered produced lifecycle events: %d up, %d down", ups, downs)
+	}
+
+	// The first few failures are reported; the rest are not, or the fix is absent.
+	warns := cap.countAtLeast(slog.LevelWarn, "Nano disconnected without ever answering")
+	if warns == 0 {
+		t.Error("the first failures were not reported at all")
+	}
+	if warns > muteLogAttempts {
+		t.Errorf("reported %d failures at warn level, want at most %d", warns, muteLogAttempts)
+	}
+
+	// And the summary must not fire on every cycle either.
+	if n := cap.countAtLeast(slog.LevelWarn, "probably wedged"); n > 1 {
+		t.Errorf("the wedged-Nano summary was logged %d times in one interval", n)
+	}
+}
+
+func TestTheWedgedNanoSummaryEventuallyExplainsItself(t *testing.T) {
+	// Quiet must not mean silent: a board that needs hands on it has to say so.
+	cfg := DefaultConfig()
+	cfg.ReconnectMin = time.Millisecond
+	cfg.ReconnectMax = time.Millisecond
+
+	const cycles = 12
+	var piEnds []serialport.Transport
+	var nanoPipes []*serialport.Pipe
+	for range cycles {
+		pi, nano := serialport.NewPipePair()
+		piEnds = append(piEnds, pi)
+		nanoPipes = append(nanoPipes, nano)
+	}
+
+	cap := &capturingLogger{}
+	clk := system.NewFakeClock(time.Date(2026, 10, 1, 8, 0, 0, 0, time.UTC))
+	link := NewLink(cfg, Deps{
+		Opener: serialport.NewPipeOpener(piEnds...), Clock: clk,
+		Logger: slog.New(cap), Observer: newRecordingObserver(),
+		Lifecycle: newRecordingLifecycle(),
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); _ = link.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Error("link Run did not stop")
+		}
+	})
+
+	// Push past the suppression threshold, then past the summary interval.
+	for i := range cycles - 1 {
+		waitUntil(t, "session to open", link.Connected)
+		nanoPipes[i].Close()
+		waitUntil(t, "session to end", func() bool { return !link.Connected() })
+		waitUntil(t, "backoff timer", func() bool { return clk.Waiters() > 0 })
+		if i == muteLogAttempts+1 {
+			clk.Advance(muteSummaryInterval + time.Second)
+			continue
+		}
+		clk.Advance(time.Second)
+	}
+
+	waitUntil(t, "the wedged-Nano diagnosis", func() bool {
+		return cap.countAtLeast(slog.LevelWarn, "probably wedged") >= 1
+	})
 }

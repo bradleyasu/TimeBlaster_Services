@@ -142,6 +142,14 @@ type Link struct {
 	clock24h    bool
 
 	connected atomic.Bool
+	// sessionLive records whether the current session has heard anything from
+	// the Nano. It gates the lifecycle notifications, so an open port that never
+	// answers is not announced as a working link.
+	sessionLive atomic.Bool
+
+	// mute tracks a run of sessions in which the Nano said nothing, to keep a
+	// permanently wedged board from filling the journal. Run's goroutine owns it.
+	mute muteState
 }
 
 // Deps are the link's collaborators.
@@ -216,6 +224,15 @@ func (l *Link) liveAt(last time.Time) bool {
 	return l.clock.Since(last) <= l.cfg.HeartbeatTimeout
 }
 
+// mute tracking. Only Run's goroutine touches these, so they need no lock.
+//
+// muteStreak counts consecutive sessions in which the Nano said nothing at all.
+type muteState struct {
+	streak  int
+	since   time.Time
+	lastLog time.Time
+}
+
 // Status returns a snapshot for the health endpoint.
 func (l *Link) Status() Status {
 	l.mu.RLock()
@@ -257,7 +274,11 @@ func (l *Link) Run(ctx context.Context) error {
 			continue
 		}
 
-		l.log.Info("Nano connected", "device", device)
+		if l.mute.streak > muteLogAttempts {
+			l.log.Debug("Nano serial port reopened", "device", device)
+		} else {
+			l.log.Info("Nano connected", "device", device)
+		}
 		backoff = l.cfg.ReconnectMin
 
 		err = l.session(ctx, transport, device)
@@ -268,13 +289,21 @@ func (l *Link) Run(ctx context.Context) error {
 		l.status.Reconnects++
 		l.mu.Unlock()
 
+		live := l.sessionLive.Load()
+
 		if ctx.Err() != nil {
-			l.notifyDown(ctx.Err())
+			if live {
+				l.notifyDown(ctx.Err())
+			}
 			return ctx.Err()
 		}
 		l.recordError(err)
-		l.notifyDown(err)
-		l.log.Warn("Nano disconnected", "device", device, "error", err, "reconnect_in", backoff)
+		// A session that never produced a byte never came up, so there is no
+		// "down" to report: the link has simply stayed broken.
+		if live {
+			l.notifyDown(err)
+		}
+		l.logDisconnect(device, err, backoff, live)
 
 		if !l.sleep(ctx, backoff) {
 			return ctx.Err()
@@ -304,8 +333,16 @@ func (l *Link) session(ctx context.Context, t serialport.Transport, device strin
 	// Drain anything queued while disconnected: those commands describe a state
 	// that may no longer be current, and resync below sends the truth anyway.
 	l.drainQueue()
-	l.notifyUp(device)
+	// Resync must happen now regardless: it is what puts the time on the
+	// seven-segment display, and that has to work whether or not the Nano
+	// answers.
 	l.Resync()
+	// LinkUp is deliberately NOT sent here. An open port is not a working link,
+	// and announcing one per reconnect made a wedged Nano generate a LinkUp /
+	// LinkDown pair every 8.5 seconds -- six journal lines and two full snapshot
+	// refetches in every connected phone, forever. It is sent below, the moment
+	// the Nano actually says something.
+	l.sessionLive.Store(false)
 
 	var wg sync.WaitGroup
 	readErr := make(chan error, 1)
@@ -323,7 +360,7 @@ func (l *Link) session(ctx context.Context, t serialport.Transport, device strin
 		l.writeLoop(sessionCtx, t)
 	}()
 
-	err := l.supervise(sessionCtx, readErr, lastRx)
+	err := l.supervise(sessionCtx, readErr, lastRx, device)
 	cancel()
 	// Closing the transport is what unblocks a reader parked in Read.
 	_ = t.Close()
@@ -331,8 +368,20 @@ func (l *Link) session(ctx context.Context, t serialport.Transport, device strin
 	return err
 }
 
+// How loudly to report a Nano that opens but never speaks.
+//
+// A wedged board still enumerates, so the reconnect loop keeps succeeding and
+// failing every heartbeat window. Logged in full that is six lines per cycle:
+// one real incident produced 39478 journal lines overnight and said nothing the
+// first three had not. After a few attempts the per-cycle lines drop to Debug
+// and a periodic summary carries the diagnosis instead.
+const (
+	muteLogAttempts     = 3
+	muteSummaryInterval = 5 * time.Minute
+)
+
 // supervise drives time sync and heartbeat checking for one session.
-func (l *Link) supervise(ctx context.Context, readErr <-chan error, lastRx <-chan time.Time) error {
+func (l *Link) supervise(ctx context.Context, readErr <-chan error, lastRx <-chan time.Time, device string) error {
 	// Start on the short re-check when the clock is not trustworthy yet.
 	// Scheduling the first tick a whole TimeSyncInterval out would leave the
 	// Nano animating for the full minute even though NTP typically lands after
@@ -371,6 +420,10 @@ func (l *Link) supervise(ctx context.Context, readErr <-chan error, lastRx <-cha
 
 		case t := <-lastRx:
 			last = t
+			// The first word from the Nano is what makes this a live link.
+			if !l.sessionLive.Swap(true) {
+				l.notifyUp(device)
+			}
 
 		case <-syncTimer.C():
 			if !l.clockReady() {
@@ -697,6 +750,44 @@ func (l *Link) recordError(err error) {
 	l.mu.Lock()
 	l.status.LastError = err.Error()
 	l.mu.Unlock()
+}
+
+// logDisconnect reports a lost session at a volume that suits how long the
+// Nano has been failing the same way.
+func (l *Link) logDisconnect(device string, err error, backoff time.Duration, live bool) {
+	if live {
+		// A link that was working and then dropped is a genuine event every
+		// time, so this is always worth a line.
+		l.mute = muteState{}
+		l.log.Warn("Nano disconnected", "device", device, "error", err, "reconnect_in", backoff)
+		return
+	}
+
+	now := l.clock.Now()
+	if l.mute.streak == 0 {
+		l.mute.since = now
+		l.mute.lastLog = now
+	}
+	l.mute.streak++
+
+	if l.mute.streak <= muteLogAttempts {
+		l.log.Warn("Nano disconnected without ever answering",
+			"device", device, "error", err, "reconnect_in", backoff, "attempt", l.mute.streak)
+		return
+	}
+
+	l.log.Debug("Nano still not answering", "device", device, "error", err,
+		"attempt", l.mute.streak)
+
+	if l.clock.Since(l.mute.lastLog) >= muteSummaryInterval {
+		l.mute.lastLog = now
+		// The actionable diagnosis, stated once per interval rather than per
+		// cycle. A board in this state does not recover on its own: reopening
+		// the port does not reset it, so it needs power cycling or a reflash.
+		l.log.Warn("the Nano has not answered once since it was first opened; it is probably wedged and needs a physical reset",
+			"device", device, "silent_for", l.clock.Since(l.mute.since).Round(time.Second),
+			"attempts", l.mute.streak, "last_error", err)
+	}
 }
 
 func (l *Link) notifyUp(device string) {
