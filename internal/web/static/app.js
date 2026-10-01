@@ -334,63 +334,30 @@
   // The alarm model stores an hour of 0-23 whatever the user's preference. The
   // editor shows whichever form matches the setting and converts at the edges,
   // so the two never disagree about what "7" means.
-  function editorUses24h() {
-    return !!(state && state.clock && state.clock.clock_24h);
-  }
-
   function setEditorTime(hour24, minute) {
-    var hourEl = $('ed-hour');
-    var mer = $('ed-meridiem');
-    $('ed-minute').value = pad(minute);
-
-    if (editorUses24h()) {
-      mer.hidden = true;
-      hourEl.min = 0;
-      hourEl.max = 23;
-      hourEl.value = pad(hour24);
-      return;
-    }
-
-    mer.hidden = false;
-    hourEl.min = 1;
-    hourEl.max = 12;
-    hourEl.value = hour24 % 12 || 12;   // midnight and noon both show as 12
-    var pm = hour24 >= 12;
-    Array.prototype.forEach.call(mer.children, function (b) {
-      b.classList.toggle('on', (b.dataset.m === 'pm') === pm);
-    });
+    // A time input's value is always 24-hour HH:MM regardless of how the
+    // platform chooses to display it.
+    $('ed-time').value = pad(hour24) + ':' + pad(minute);
   }
 
-  // editorTime reads the entered time, or reports why it cannot.
+  // editorTime reads the chosen time, or reports why it cannot.
   //
-  // It rejects rather than clamps. A number input does not stop anyone typing
-  // 75, and quietly turning that into 23 -- or into midnight, in 12-hour mode
-  // -- would set an alarm for a time the user never asked for. An alarm going
-  // off at the wrong hour is the one failure an alarm clock cannot have, and a
-  // silent correction is indistinguishable from it having worked.
+  // The native picker cannot produce an impossible time, so most of what this
+  // used to guard against is gone with the number fields. It still rejects
+  // rather than assumes: the field can be left empty, and a browser without
+  // time-input support falls back to a plain text box that accepts anything.
+  // Defaulting to an hour nobody chose is the one failure an alarm clock cannot
+  // have, and a silent default is indistinguishable from it having worked.
   function editorTime() {
-    var use24 = editorUses24h();
-    var hourMin = use24 ? 0 : 1;
-    var hourMax = use24 ? 23 : 12;
-
-    var hourRaw = String($('ed-hour').value).trim();
-    var minRaw = String($('ed-minute').value).trim();
-    var hour = parseInt(hourRaw, 10);
-    var minute = parseInt(minRaw, 10);
-
-    if (hourRaw === '' || isNaN(hour) || hour < hourMin || hour > hourMax) {
-      return { field: 'ed-hour', error: 'Hour must be between ' + hourMin + ' and ' + hourMax + '.' };
+    var raw = String($('ed-time').value).trim();
+    var m = /^(\d{1,2}):(\d{2})$/.exec(raw);
+    if (!m) {
+      return { field: 'ed-time', error: 'Choose a time for the alarm.' };
     }
-    if (minRaw === '' || isNaN(minute) || minute < 0 || minute > 59) {
-      return { field: 'ed-minute', error: 'Minutes must be between 0 and 59.' };
-    }
-
-    if (!use24) {
-      // 12 AM is hour 0 and 12 PM is hour 12, so the modulo has to come before
-      // the twelve-hour shift rather than after it.
-      hour = hour % 12;
-      var chosen = $('ed-meridiem').querySelector('.day.on');
-      if (chosen && chosen.dataset.m === 'pm') hour += 12;
+    var hour = parseInt(m[1], 10);
+    var minute = parseInt(m[2], 10);
+    if (hour > 23 || minute > 59) {
+      return { field: 'ed-time', error: 'That is not a valid time.' };
     }
     return { hour: hour, minute: minute };
   }
@@ -912,18 +879,9 @@
     });
 
     $('btn-add').addEventListener('click', function () { openEditor(null); });
-    // Mutually exclusive, like a radio pair: tapping one always leaves exactly
-    // one selected, so editorHour24 never has to guess.
-    Array.prototype.forEach.call($('ed-meridiem').children, function (b) {
-      b.addEventListener('click', function () {
-        Array.prototype.forEach.call($('ed-meridiem').children, function (o) {
-          o.classList.toggle('on', o === b);
-        });
-      });
-    });
 
-    ['ed-hour', 'ed-minute'].forEach(function (id) {
-      $(id).addEventListener('input', function () { $(id).classList.remove('invalid'); });
+    $('ed-time').addEventListener('input', function () {
+      $('ed-time').classList.remove('invalid');
     });
 
     $('ed-save').addEventListener('click', saveAlarm);

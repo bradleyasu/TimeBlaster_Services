@@ -104,14 +104,28 @@ func TestAppJSDoesNotReadStateKeysTheServerNeverSends(t *testing.T) {
 	}
 }
 
-func TestAlarmEditorHasAMeridiemControl(t *testing.T) {
-	// The alarm model stores hours as 0-23. Without this control a user in
-	// 12-hour mode had to know that 7pm is 19, which the rest of the app never
-	// asks of them.
+func TestAlarmEditorUsesANativeTimePicker(t *testing.T) {
+	// The alarm model stores hours as 0-23, and a user in 12-hour mode should
+	// never have to know that 7pm is 19. A pair of number fields plus an AM/PM
+	// toggle did that job and summoned a keyboard; a native time input does it
+	// with the platform's own wheel and cannot express an impossible time.
 	html := readStatic(t, "index.html")
-	if !strings.Contains(html, `id="ed-meridiem"`) {
-		t.Error("the alarm editor has no AM/PM control")
+	tag := regexp.MustCompile(`<input[^>]*id="ed-time"[^>]*>`).FindString(html)
+	if tag == "" {
+		t.Fatal("the alarm editor has no ed-time input")
 	}
+	if !strings.Contains(tag, `type="time"`) {
+		t.Errorf("the alarm time field is not a native time input, so it raises a keyboard: %s", tag)
+	}
+
+	// The old controls must be gone rather than merely hidden: two ways to set
+	// one time is how they drift apart.
+	for _, gone := range []string{`id="ed-hour"`, `id="ed-minute"`, `id="ed-meridiem"`} {
+		if strings.Contains(html, gone) {
+			t.Errorf("%s is still in the markup alongside the time picker", gone)
+		}
+	}
+
 	js := readStatic(t, "app.js")
 	for _, fn := range []string{"function setEditorTime", "function editorTime"} {
 		if !strings.Contains(js, fn) {
@@ -119,10 +133,15 @@ func TestAlarmEditorHasAMeridiemControl(t *testing.T) {
 		}
 	}
 
-	// Reading the time must be able to fail. Clamping an impossible hour into
-	// range silently saved an alarm for a time nobody asked for.
+	// Reading the time must still be able to fail. The picker cannot produce an
+	// impossible time, but it can be left empty, and a browser without support
+	// falls back to a text box that accepts anything. Defaulting to an hour
+	// nobody chose is indistinguishable from the alarm having worked.
 	if !strings.Contains(js, "time.error") {
-		t.Error("saveAlarm does not check for a rejected time; is it clamping again?")
+		t.Error("saveAlarm does not check for a rejected time; is it assuming a default again?")
+	}
+	if !strings.Contains(funcBody(t, js, "editorTime"), "field:") {
+		t.Error("editorTime never reports a rejected field, so nothing can be marked invalid")
 	}
 }
 

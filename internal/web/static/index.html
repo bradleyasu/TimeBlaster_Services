@@ -178,14 +178,13 @@
   <div class="sheet-inner">
     <h2 id="editor-title">NEW ALARM</h2>
 
+    <!-- A native time control: on iOS this is the Clock app's hour / minute /
+         AM-PM wheel, on Android the platform picker, and on a desktop a spinner
+         field. A picker cannot produce an impossible time, which is most of what
+         the two number fields and the AM/PM toggle existed to police. The value
+         is always 24-hour HH:MM whatever the wheel chooses to show. -->
     <div class="time-row">
-      <input type="number" id="ed-hour" min="1" max="12" inputmode="numeric">
-      <span>:</span>
-      <input type="number" id="ed-minute" min="0" max="59" inputmode="numeric">
-      <div class="meridiem" id="ed-meridiem">
-        <button type="button" class="day" data-m="am">AM</button>
-        <button type="button" class="day" data-m="pm">PM</button>
-      </div>
+      <input type="time" id="ed-time" step="60" required>
     </div>
 
     <label class="field">
