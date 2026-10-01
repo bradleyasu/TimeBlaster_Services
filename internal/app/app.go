@@ -533,6 +533,7 @@ func (a *App) registerTasks() {
 	}
 	if a.media != nil {
 		a.sup.add("channel-refresh", false, a.media.Run)
+		a.sup.add("playback-watchdog", false, a.media.WatchPlayback)
 	}
 	a.sup.add("screen", false, a.runScreen)
 	a.sup.add("clock-broadcast", false, a.runClockBroadcast)

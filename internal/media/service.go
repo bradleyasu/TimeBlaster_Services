@@ -618,16 +618,7 @@ func (s *Service) HandlePlayerEvent(ev mpv.Event) {
 		return
 	}
 
-	s.mu.Lock()
-	if s.reloadChannel != current.Number || s.clock.Since(s.reloadLastAt) > reloadFailureReset {
-		// A different channel, or this one after a long quiet spell.
-		s.reloadChannel = current.Number
-		s.reloadFailures = 0
-	}
-	s.reloadFailures++
-	s.reloadLastAt = s.clock.Now()
-	failures := s.reloadFailures
-	s.mu.Unlock()
+	failures := s.noteFailure(current.Number)
 
 	if failures > maxReloadFailures {
 		// Giving up is the point: the standby image is a better television
@@ -679,6 +670,185 @@ func (s *Service) HandlePlayerEvent(ev mpv.Event) {
 			}
 		}
 	}(*current)
+}
+
+// noteFailure records a playback failure for a channel and returns how many
+// have accumulated without a picture since.
+//
+// Shared by both recovery paths -- a stream that ends and one that silently
+// stops advancing -- so a channel that cannot play is given up on however it
+// fails, rather than each path getting its own unbounded budget.
+func (s *Service) noteFailure(number string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.reloadChannel != number || s.clock.Since(s.reloadLastAt) > reloadFailureReset {
+		// A different channel, or this one after a long quiet spell.
+		s.reloadChannel = number
+		s.reloadFailures = 0
+	}
+	s.reloadFailures++
+	s.reloadLastAt = s.clock.Now()
+	return s.reloadFailures
+}
+
+// WatchPlayback reloads a channel whose playback has silently stopped.
+//
+// mpv can end up holding an audio device it prepared but never started. The
+// picture freezes on the last frame, no property reports an error, and no
+// end-file event arrives, so HandlePlayerEvent never runs and the television
+// stays frozen until something else forces a load. This is the backstop: if the
+// playback position stops advancing while nothing says it should have, reload.
+//
+// It deliberately reloads at once rather than backing off. A stall is not a
+// failing stream -- the usual cause is the audio output, and rebuilding it is
+// exactly the fix -- so waiting only prolongs a frozen screen. The shared
+// failure budget still applies, so a channel that stalls forever is eventually
+// left on the standby image instead of being reloaded forever.
+func (s *Service) WatchPlayback(ctx context.Context) error {
+	timeout := s.mpvCfg.StallTimeout.Duration
+	if timeout <= 0 {
+		s.log.Debug("playback stall detection is disabled")
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	interval := s.mpvCfg.StallCheckInterval.Duration
+	if interval <= 0 || interval >= timeout {
+		interval = timeout / 4
+	}
+
+	var (
+		lastPos     float64
+		lastChannel string
+		movedAt     = s.clock.Now()
+	)
+
+	for {
+		timer := s.clock.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C():
+		}
+
+		s.mu.RLock()
+		current := s.current
+		s.mu.RUnlock()
+
+		// Nothing to stall: a static image has no playback position, and its
+		// own event handler puts it back if it ends.
+		if current == nil || s.player == nil || !s.player.Alive() {
+			movedAt = s.clock.Now()
+			lastChannel = ""
+			continue
+		}
+		if current.Number != lastChannel {
+			// A fresh channel starts its own clock, so a slow tune is not
+			// counted against the previous one.
+			lastChannel = current.Number
+			lastPos = -1
+			movedAt = s.clock.Now()
+			continue
+		}
+
+		pos, state := s.playbackPosition(ctx)
+		switch state {
+		case posHalted:
+			// Paused, buffering, or finished: the position is meant to be
+			// still, so this is not a stall and the clock is reset.
+			movedAt = s.clock.Now()
+			continue
+		case posUnknown:
+			// Unreadable is not progress. During the observed freeze several
+			// properties went unavailable while the picture sat still, so
+			// treating this as healthy would miss the very case this exists
+			// for. The timeout is long enough to absorb a brief gap at startup.
+		case posKnown:
+			if pos != lastPos {
+				lastPos = pos
+				movedAt = s.clock.Now()
+				continue
+			}
+		}
+
+		if s.clock.Since(movedAt) < timeout {
+			continue
+		}
+
+		stalled := s.clock.Since(movedAt).Round(time.Second)
+		failures := s.noteFailure(current.Number)
+		if failures > maxReloadFailures {
+			s.log.Error("playback keeps stalling; showing the standby image",
+				"channel", current.Number, "stalled_for", stalled, "failures", failures)
+			s.mu.Lock()
+			s.current = nil
+			s.shownImage = ""
+			s.mu.Unlock()
+			if err := s.ShowNoChannel(ctx); err != nil {
+				s.log.Error("could not show the no-channel image", "error", err)
+			}
+			movedAt = s.clock.Now()
+			lastChannel = ""
+			continue
+		}
+
+		s.log.Warn("playback has stopped advancing; reloading the channel",
+			"channel", current.Number, "stalled_for", stalled,
+			"position", pos, "failures", failures)
+
+		ch := *current
+		// Clearing current is what makes SelectChannel actually reload: asked
+		// for the channel already playing it does nothing, which is why
+		// re-selecting the same channel by hand did not clear the freeze.
+		s.mu.Lock()
+		s.current = nil
+		s.mu.Unlock()
+
+		if err := s.SelectChannel(ctx, ch); err != nil {
+			s.log.Error("could not reload a stalled channel", "channel", ch.Number, "error", err)
+		}
+		lastPos = -1
+		movedAt = s.clock.Now()
+	}
+}
+
+// posState distinguishes the three answers that matter, because "no position"
+// and "position deliberately not moving" must not be confused: treating a
+// pause as a stall would reload a stream that is behaving.
+type posState int
+
+const (
+	// posKnown means the position was read and can be compared.
+	posKnown posState = iota
+	// posUnknown means it could not be read, which is not evidence of health.
+	posUnknown
+	// posHalted means something legitimately explains a still position.
+	posHalted
+)
+
+// playbackPosition reads mpv's playback position.
+func (s *Service) playbackPosition(ctx context.Context) (float64, posState) {
+	ctx, cancel := context.WithTimeout(ctx, s.mpvCfg.CommandTimeout.Duration)
+	defer cancel()
+
+	// A deliberate pause, buffering, or a finished file all stop the position
+	// without anything being wrong.
+	for _, name := range []string{"pause", "paused-for-cache", "eof-reached"} {
+		var flag bool
+		if err := s.player.GetProperty(ctx, name, &flag); err != nil {
+			continue // unreadable: fall through to the position check
+		}
+		if flag {
+			return 0, posHalted
+		}
+	}
+
+	var pos float64
+	if err := s.player.GetProperty(ctx, "time-pos", &pos); err != nil {
+		s.log.Debug("could not read the playback position", "error", err)
+		return 0, posUnknown
+	}
+	return pos, posKnown
 }
 
 // ChannelNumberInt returns a channel's number as an integer where possible,

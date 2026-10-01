@@ -170,6 +170,12 @@ func TestValidateFieldRanges(t *testing.T) {
 		// after the fault it was meant to precede.
 		{"disk thresholds inverted", func(c *Config) { c.Storage.DiskDownBelowMB = 99999 }, "disk_down_below_mb"},
 		{"negative disk threshold", func(c *Config) { c.Storage.DiskDegradedBelowMB = -1 }, "disk"},
+		// Checking no more often than the timeout doubles the real time before
+		// a frozen picture is recovered.
+		{"stall check not shorter than timeout", func(c *Config) {
+			c.MPV.StallCheckInterval = Dur(30 * time.Second)
+		}, "stall_check_interval"},
+		{"negative stall timeout", func(c *Config) { c.MPV.StallTimeout = Dur(-time.Second) }, "stall_timeout"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

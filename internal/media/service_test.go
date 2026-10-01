@@ -938,3 +938,231 @@ func TestReloadBackoffGrowsWithFailures(t *testing.T) {
 		t.Errorf("backoff did not grow: first %s, second %s", first, second)
 	}
 }
+
+// healthyPlayback seeds the properties the stall watchdog reads for a stream
+// that is playing normally.
+func healthyPlayback(f *fixture, pos float64) {
+	f.player.SetProp("pause", false)
+	f.player.SetProp("paused-for-cache", false)
+	f.player.SetProp("eof-reached", false)
+	f.player.SetProp("time-pos", pos)
+}
+
+// runWatchdog starts WatchPlayback and returns a stop function.
+func runWatchdog(t *testing.T, f *fixture) func() {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); _ = f.svc.WatchPlayback(ctx) }()
+	return func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Error("WatchPlayback did not stop")
+		}
+	}
+}
+
+// watchdogChecks counts how many times the watchdog has inspected the player.
+//
+// Counting clock advances does not work: the overlay owns fake-clock timers too,
+// so an advance is not necessarily a watchdog check, and a negative test that
+// never actually checked would pass whatever the watchdog does. "pause" is the
+// first property read on every check -- "time-pos" is not, because a halted
+// player short-circuits before it is reached.
+func watchdogChecks(f *fixture) int {
+	n := 0
+	for _, c := range f.player.CallsNamed("get_property") {
+		if len(c.Args) > 1 {
+			if name, _ := c.Args[1].(string); name == "pause" {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+// runChecks drives the fake clock until the watchdog has performed at least n
+// checks, and well past the stall timeout, so a test can assert that nothing
+// happened for the right reason.
+func runChecks(t *testing.T, f *fixture, n int) {
+	t.Helper()
+	timeout := config.Default().MPV.StallTimeout.Duration
+	interval := config.Default().MPV.StallCheckInterval.Duration
+	start := f.clock.Now()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if watchdogChecks(f) >= n && f.clock.Since(start) > 2*timeout {
+			return
+		}
+		waitForWaiter(t, f.clock)
+		f.clock.Advance(interval)
+	}
+	t.Fatalf("watchdog only performed %d checks in %s of fake time; wanted %d",
+		watchdogChecks(f), f.clock.Since(start), n)
+}
+
+func TestWatchdogReloadsPlaybackThatStopsAdvancing(t *testing.T) {
+	// The freeze this exists for: mpv held an audio device it had prepared but
+	// never started. The picture sat still, no property reported an error and no
+	// end-file event arrived, so nothing noticed for six minutes.
+	f := newFixture(t, chans()...)
+	ctx := context.Background()
+	if err := f.svc.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.SelectBand(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	healthyPlayback(f, 42.0) // and never advances again
+	f.player.Reset()
+
+	stop := runWatchdog(t, f)
+	defer stop()
+
+	// Drive the fake clock until the stall is acted on. The overlay also holds
+	// timers, so counting advances is not the same as counting watchdog checks.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(f.player.CallsNamed("loadfile")) > 0 {
+			break
+		}
+		waitForWaiter(t, f.clock)
+		f.clock.Advance(config.Default().MPV.StallCheckInterval.Duration)
+	}
+	loads := f.player.CallsNamed("loadfile")
+	if len(loads) == 0 {
+		t.Fatal("a frozen channel was never reloaded")
+	}
+	if url, _ := loads[0].Args[1].(string); !strings.Contains(url, "/channel/1.") {
+		t.Errorf("reloaded the wrong thing: %q", url)
+	}
+}
+
+func TestWatchdogLeavesAdvancingPlaybackAlone(t *testing.T) {
+	f := newFixture(t, chans()...)
+	ctx := context.Background()
+	if err := f.svc.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.SelectBand(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	healthyPlayback(f, 1.0)
+	f.player.Reset()
+
+	stop := runWatchdog(t, f)
+	defer stop()
+
+	// Playback advances on every check, for well past the timeout. The position
+	// is bumped from a goroutine-free loop keyed on the watchdog's own reads, so
+	// every check genuinely sees forward progress.
+	timeout := config.Default().MPV.StallTimeout.Duration
+	interval := config.Default().MPV.StallCheckInterval.Duration
+	start := f.clock.Now()
+	pos := 1.0
+	for f.clock.Since(start) <= 3*timeout {
+		waitForWaiter(t, f.clock)
+		pos += 2
+		f.player.SetProp("time-pos", pos)
+		f.clock.Advance(interval)
+	}
+	if got := watchdogChecks(f); got < 6 {
+		t.Fatalf("the watchdog only checked %d times; the test proved nothing", got)
+	}
+	if n := len(f.player.CallsNamed("loadfile")); n != 0 {
+		t.Errorf("healthy playback was reloaded %d times", n)
+	}
+}
+
+func TestWatchdogDoesNotReloadADeliberatelyHaltedPlayer(t *testing.T) {
+	// A paused or buffering player has a still position by design. Reloading it
+	// would interrupt a stream that is behaving.
+	for _, prop := range []string{"pause", "paused-for-cache", "eof-reached"} {
+		t.Run(prop, func(t *testing.T) {
+			f := newFixture(t, chans()...)
+			ctx := context.Background()
+			if err := f.svc.Refresh(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.svc.SelectBand(ctx, 0); err != nil {
+				t.Fatal(err)
+			}
+			healthyPlayback(f, 7.0)
+			f.player.SetProp(prop, true) // position stays still, legitimately
+			f.player.Reset()
+
+			stop := runWatchdog(t, f)
+			defer stop()
+			runChecks(t, f, 6)
+
+			if n := len(f.player.CallsNamed("loadfile")); n != 0 {
+				t.Errorf("reloaded a player halted by %s (%d times)", prop, n)
+			}
+		})
+	}
+}
+
+func TestWatchdogGivesUpOnAChannelThatKeepsStalling(t *testing.T) {
+	// Recovering forever is the unbounded loop this codebase already learned to
+	// avoid, so a channel that will never play must end on the standby image.
+	f := newFixture(t, chans()...)
+	ctx := context.Background()
+	if err := f.svc.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.SelectBand(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	healthyPlayback(f, 3.0)
+
+	stop := runWatchdog(t, f)
+	defer stop()
+
+	// Every reload stalls again: never advance time-pos, never report a picture.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if f.svc.Current() == nil {
+			break
+		}
+		waitForWaiter(t, f.clock)
+		f.clock.Advance(config.Default().MPV.StallCheckInterval.Duration)
+	}
+	if cur := f.svc.Current(); cur != nil {
+		t.Errorf("a permanently stalled channel is still current: %+v", cur)
+	}
+}
+
+func TestWatchdogCanBeDisabled(t *testing.T) {
+	f := newFixture(t, chans()...)
+	f.svc.mpvCfg.StallTimeout = config.Dur(0)
+	ctx := context.Background()
+	if err := f.svc.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.SelectBand(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	healthyPlayback(f, 5.0)
+	f.player.Reset()
+
+	wctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); _ = f.svc.WatchPlayback(wctx) }()
+
+	// Well past any timeout: a disabled watchdog must do nothing regardless.
+	for range 30 {
+		f.clock.Advance(time.Second)
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a disabled watchdog did not stop")
+	}
+	if n := len(f.player.CallsNamed("loadfile")); n != 0 {
+		t.Errorf("a disabled watchdog reloaded %d times", n)
+	}
+}

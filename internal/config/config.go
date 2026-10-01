@@ -323,6 +323,17 @@ type MPV struct {
 	RestartMaxBackoff Duration `toml:"restart_max_backoff"`
 	// StartupTimeout is how long to wait for mpv's IPC socket to appear.
 	StartupTimeout Duration `toml:"startup_timeout"`
+
+	// StallTimeout is how long playback may fail to advance before the channel
+	// is reloaded, and StallCheckInterval is how often that is checked.
+	//
+	// mpv can be left holding an audio device it has prepared but never
+	// started: the picture freezes, nothing errors, and no end-file event
+	// arrives, so none of the existing recovery paths notice. Observed lasting
+	// six minutes until a channel change cleared it. Set StallTimeout to zero
+	// to disable the check.
+	StallTimeout       Duration `toml:"stall_timeout"`
+	StallCheckInterval Duration `toml:"stall_check_interval"`
 	// CommandTimeout bounds a single IPC request.
 	CommandTimeout Duration `toml:"command_timeout"`
 }
@@ -543,6 +554,39 @@ func Default() Config {
 				"--cache=yes",
 				"--demuxer-max-bytes=32MiB",
 				"--audio-device=auto",
+
+				// Clock video off the display rather than the audio output.
+				//
+				// With the default (video-sync=audio) the audio device is the
+				// master clock, so anything that stalls audio freezes the
+				// picture. On the USB speaker that is a real risk: it accepts
+				// only 48 kHz, roughly half the library is 44.1 kHz, and
+				// because the channels are HLS Direct the rates reach mpv
+				// untouched. A stall then froze the television until something
+				// forced a reload. Clocking off the display demotes that from a
+				// frozen screen to a brief audio glitch.
+				"--video-sync=display-resample",
+
+				// Output exactly what the USB speaker accepts, always.
+				//
+				// Its single altset is S16_LE / 2ch / 48000. Letting mpv follow
+				// the stream means the output is torn down and rebuilt whenever
+				// an item's rate differs from the last -- which on one channel
+				// is 73% of content boundaries, and is where the freezing was
+				// noticed. Fixing the output format means a rate change is just
+				// a resample, with no device reinitialisation at all. HDMI is
+				// happy with 48 kHz too, so this is not a USB-only setting.
+				"--audio-samplerate=48000",
+				"--audio-format=s16",
+
+				// More margin than the ~100 ms the device defaults to. The
+				// speaker is a bus-powered full-speed device, and it underran
+				// from load as light as a property poll.
+				"--audio-buffer=0.3",
+
+				// If the output cannot be opened at all, keep playing without
+				// it instead of hanging. Silent video beats a frozen picture.
+				"--audio-fallback-to-null=yes",
 			},
 			AudioOutput:       TVAudioHDMI,
 			NoChannelImage:    "/usr/share/timeblaster/assets/no-channel.png",
@@ -552,6 +596,11 @@ func Default() Config {
 			RestartMaxBackoff: Dur(30 * time.Second),
 			StartupTimeout:    Dur(15 * time.Second),
 			CommandTimeout:    Dur(5 * time.Second),
+			// Long enough that a slow tune is never mistaken for a stall --
+			// cold channel starts take seconds -- and short enough that a
+			// viewer is not left staring at a frozen frame.
+			StallTimeout:       Dur(12 * time.Second),
+			StallCheckInterval: Dur(2 * time.Second),
 		},
 		Overlay: Overlay{
 			Enabled:    true,
@@ -664,6 +713,17 @@ func (c Config) Validate() error {
 	}
 	if c.Storage.AlarmSoundsDir == "" {
 		add("storage.alarm_sounds_dir must not be empty")
+	}
+	if c.MPV.StallTimeout.Duration < 0 {
+		add("mpv.stall_timeout must not be negative")
+	}
+	if c.MPV.StallTimeout.Duration > 0 &&
+		c.MPV.StallCheckInterval.Duration >= c.MPV.StallTimeout.Duration {
+		// Checking no more often than the timeout means the first check that
+		// could notice a stall is also the one that acts on it, so the real
+		// delay before recovery is twice what is configured.
+		add("mpv.stall_check_interval (%s) must be shorter than mpv.stall_timeout (%s)",
+			c.MPV.StallCheckInterval.Duration, c.MPV.StallTimeout.Duration)
 	}
 	if c.Storage.DiskDegradedBelowMB < 0 || c.Storage.DiskDownBelowMB < 0 {
 		add("storage disk thresholds must not be negative")
