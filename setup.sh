@@ -542,6 +542,24 @@ install_modules_load() {
   ok "installed ${dst} (cdc_acm, so char-ttyACM resolves before services start)"
 }
 
+configure_journald() {
+  step "Capping persistent logging"
+
+  local src="${SCRIPT_DIR}/deploy/journald/timeblaster.conf"
+  local dst="/etc/systemd/journald.conf.d/timeblaster.conf"
+
+  if [[ -f "$dst" ]] && cmp -s "$src" "$dst"; then
+    skip "journald limits are already current"
+    return
+  fi
+  run install -d -m 0755 -o root -g root /etc/systemd/journald.conf.d
+  run install -m 0644 -o root -g root "$src" "$dst"
+  # The directory journald writes into when storage is persistent.
+  run install -d -m 2755 -o root -g systemd-journal /var/log/journal
+  run systemctl restart systemd-journald
+  ok "installed ${dst} (persistent, capped at 200M, keeping 1G free)"
+}
+
 configure_hostname() {
   step "Configuring the hostname and mDNS"
 
@@ -1301,6 +1319,7 @@ main() {
   install_assets
   install_udev
   install_modules_load
+  configure_journald
   install_etv_offline_image
   configure_hostname
   configure_console
