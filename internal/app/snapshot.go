@@ -149,7 +149,10 @@ func (a *App) Health() state.Health {
 		components["alarm_sounds"] = state.StatusOK
 	}
 
-	if hw.Connected {
+	// Liveness, not Connected: a wedged Nano holds the port open indefinitely,
+	// and reporting that as OK hid a board that had been silent for 15 hours
+	// behind a status page that was green except for a blink every 8 seconds.
+	if hw.Live {
 		components["nano"] = state.StatusOK
 	} else {
 		components["nano"] = state.StatusDown
@@ -202,6 +205,7 @@ func (a *App) Health() state.Health {
 		Components: components,
 		Details: state.HealthDetails{
 			NanoConnected:       hw.Connected,
+			NanoLive:            hw.Live,
 			ErsatzTVReachable:   mediaStatus.ErsatzTVReachable,
 			PlayerAlive:         mediaStatus.PlayerAlive,
 			AlarmDeviceReady:    audioHealth.DeviceAvailable,

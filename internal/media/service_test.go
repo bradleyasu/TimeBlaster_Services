@@ -813,3 +813,128 @@ func TestPlaybackRestartIsNotMistakenForAStreamEnding(t *testing.T) {
 		t.Errorf("current channel disturbed: %+v", cur)
 	}
 }
+
+// waitForLoads waits for at least n loadfile calls, returning what it saw.
+func waitForLoads(t *testing.T, f *fixture, n int) []mpv.Call {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(f.player.CallsNamed("loadfile")) >= n {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	return f.player.CallsNamed("loadfile")
+}
+
+// failStream delivers the event mpv sends for a channel that will not play.
+func failStream(f *fixture) {
+	f.svc.HandlePlayerEvent(mpv.Event{Name: "end-file", Reason: "error", Error: "loading failed"})
+}
+
+func TestChannelThatNeverPlaysStopsBeingReloaded(t *testing.T) {
+	// The regression this exists for: a channel ErsatzTV cannot serve ends the
+	// instant it is loaded, so reload-on-failure became an infinite loop. The
+	// device logged 22541 reloads in 19 hours and, because every channel change
+	// flashes the number at the Nano, buried the serial link in writes.
+	f := newFixture(t, chans()...)
+	ctx := context.Background()
+	if err := f.svc.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.SelectBand(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	f.player.Reset()
+
+	// Each failure is answered by exactly one reload, up to the budget.
+	for i := 1; i <= maxReloadFailures; i++ {
+		failStream(f)
+		if got := len(waitForLoads(t, f, i)); got != i {
+			t.Fatalf("failure %d produced %d reloads, want %d", i, got, i)
+		}
+	}
+
+	// One more failure must give up rather than reload again.
+	f.player.Reset()
+	failStream(f)
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if f.svc.Current() == nil {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	for _, c := range f.player.CallsNamed("loadfile") {
+		if url, _ := c.Args[1].(string); strings.Contains(url, "/channel/") {
+			t.Errorf("kept reloading a dead channel: %q", url)
+		}
+	}
+	if cur := f.svc.Current(); cur != nil {
+		t.Errorf("a channel that will not play is still current: %+v", cur)
+	}
+}
+
+func TestReloadBudgetIsRestoredOncePictureArrives(t *testing.T) {
+	// A stream that drops after hours of play must not inherit the suspicion
+	// earned by one that never started.
+	f := newFixture(t, chans()...)
+	ctx := context.Background()
+	if err := f.svc.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.SelectBand(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	for range maxReloadFailures {
+		f.player.Reset()
+		failStream(f)
+		if len(waitForLoads(t, f, 1)) == 0 {
+			t.Fatal("a failure inside the budget was not reloaded")
+		}
+		// Video arrived, so the channel is healthy again.
+		f.svc.HandlePlayerEvent(mpv.Event{Name: "playback-restart"})
+	}
+
+	// Having played every time, it still gets reloaded rather than given up on.
+	f.player.Reset()
+	failStream(f)
+	loads := waitForLoads(t, f, 1)
+	if len(loads) == 0 {
+		t.Fatal("a channel that plays fine lost its retry budget")
+	}
+	if url, _ := loads[0].Args[1].(string); !strings.Contains(url, "/channel/1.") {
+		t.Errorf("reloaded the wrong thing: %q", url)
+	}
+}
+
+func TestReloadBackoffGrowsWithFailures(t *testing.T) {
+	// Without a delay the retries are still a spin, just a shorter one.
+	f := newFixture(t, chans()...)
+	ctx := context.Background()
+	if err := f.svc.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.SelectBand(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	// The fake clock advances on Sleep, so elapsed time measures the backoff.
+	start := f.clock.Now()
+	f.player.Reset()
+	failStream(f)
+	waitForLoads(t, f, 1)
+	first := f.clock.Since(start)
+	if first < reloadBackoff {
+		t.Errorf("first retry waited %s, want at least %s", first, reloadBackoff)
+	}
+
+	mid := f.clock.Now()
+	f.player.Reset()
+	failStream(f)
+	waitForLoads(t, f, 1)
+	if second := f.clock.Since(mid); second <= first {
+		t.Errorf("backoff did not grow: first %s, second %s", first, second)
+	}
+}

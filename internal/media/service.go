@@ -54,6 +54,22 @@ type Status struct {
 // ErrNoChannels means no channel is available to select.
 var ErrNoChannels = errors.New("media: no channels are available")
 
+// How hard to retry a channel whose stream dies as soon as it is loaded.
+//
+// A stream that drops after hours of play deserves an immediate reload; one
+// that has never produced a picture is broken, and hammering it helps nobody.
+// The counter is reset by playback-restart -- actual video on screen -- so a
+// channel that works keeps its full retry budget for later.
+const (
+	maxReloadFailures = 3
+	reloadBackoff     = 2 * time.Second
+	maxReloadBackoff  = 30 * time.Second
+	// reloadFailureReset is how long a channel must behave before earlier
+	// failures are forgotten, for a stream that breaks once an hour rather
+	// than instantly.
+	reloadFailureReset = 5 * time.Minute
+)
+
 // stoppedScreen marks "playback stopped" in shownImage. It is a sentinel rather
 // than an empty string so that the no-image-configured case is still
 // de-duplicated: without it, every failed refresh would re-issue a stop.
@@ -98,6 +114,15 @@ type Service struct {
 	lastErr      error
 
 	refreshNow chan struct{}
+
+	// Reload bookkeeping for a channel that fails the moment it is loaded.
+	// A channel ErsatzTV cannot serve ends instantly and forever, so reloading
+	// it on every failure is an unbounded loop: one such channel produced 22541
+	// reloads in 19 hours, and because every channel change flashes the number
+	// at the Nano, it buried the serial link in tens of thousands of writes.
+	reloadChannel  string
+	reloadFailures int
+	reloadLastAt   time.Time
 
 	// guide caches the parsed XMLTV document. It is a few hundred kilobytes of
 	// XML describing two days of scheduling, so re-fetching it for every phone
@@ -544,6 +569,12 @@ func (s *Service) HandlePlayerEvent(ev mpv.Event) {
 	// The picture has arrived. This is what releases a channel banner that has
 	// been holding since the channel was requested.
 	if ev.Name == "playback-restart" {
+		// Video is on screen, so whatever was wrong with this channel is over
+		// and it has earned its retries back.
+		s.mu.Lock()
+		s.reloadChannel = ""
+		s.reloadFailures = 0
+		s.mu.Unlock()
 		if s.overlay != nil {
 			s.overlay.PlaybackStarted()
 		}
@@ -587,12 +618,54 @@ func (s *Service) HandlePlayerEvent(ev mpv.Event) {
 		return
 	}
 
+	s.mu.Lock()
+	if s.reloadChannel != current.Number || s.clock.Since(s.reloadLastAt) > reloadFailureReset {
+		// A different channel, or this one after a long quiet spell.
+		s.reloadChannel = current.Number
+		s.reloadFailures = 0
+	}
+	s.reloadFailures++
+	s.reloadLastAt = s.clock.Now()
+	failures := s.reloadFailures
+	s.mu.Unlock()
+
+	if failures > maxReloadFailures {
+		// Giving up is the point: the standby image is a better television
+		// picture than an endless reload, and it stops the churn reaching the
+		// rest of the system.
+		s.log.Error("giving up on a channel that will not play; showing the standby image",
+			"channel", current.Number, "failures", failures, "reason", ev.Reason, "error", ev.Error)
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+
+			s.mu.Lock()
+			s.current = nil
+			s.shownImage = ""
+			s.mu.Unlock()
+
+			if err := s.ShowNoChannel(ctx); err != nil {
+				s.log.Error("could not show the no-channel image", "error", err)
+			}
+		}()
+		return
+	}
+
+	backoff := reloadBackoff * time.Duration(1<<(failures-1))
+	if backoff > maxReloadBackoff {
+		backoff = maxReloadBackoff
+	}
+
 	s.log.Warn("the channel stream ended unexpectedly; reloading",
-		"channel", current.Number, "reason", ev.Reason, "error", ev.Error)
+		"channel", current.Number, "reason", ev.Reason, "error", ev.Error,
+		"failures", failures, "retry_in", backoff)
 
 	go func(ch ersatztv.Channel) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
+
+		// Wait before retrying, so a channel that fails instantly cannot spin.
+		s.clock.Sleep(backoff)
 
 		s.mu.Lock()
 		s.current = nil // force SelectChannel to actually reload

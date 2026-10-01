@@ -1,6 +1,9 @@
 #include "Protocol.h"
 
 static uint16_t txSeq = 0;
+// Frames abandoned because the USB CDC buffer was full. Kept so a wedged host
+// is visible rather than silently lossy.
+static uint32_t txDropped = 0;
 
 uint8_t protocolCRC8(const char* data, size_t len) {
   uint8_t crc = 0;
@@ -43,12 +46,28 @@ void protocolSend(const String& type, const String* args, uint8_t argc) {
   char crcHex[3];
   snprintf(crcHex, sizeof(crcHex), "%02X", protocolCRC8(body.c_str(), body.length()));
 
+  // Frame bytes: STX + body + '|' + two CRC digits + ETX.
+  const int frameLen = (int)body.length() + 5;
+
+  // Never start a frame that will not fit. On the Nano ESP32 Serial is USB CDC,
+  // and a write with no room blocks in the USB stack until the host drains the
+  // buffer. Blocking here stalls loop(), which stops the PINGs, the display and
+  // the input polling -- the whole firmware waiting on a host that may never
+  // read again. Dropping the frame is harmless by comparison: PING repeats every
+  // second, and input reports are resent on the next change.
+  if (!Serial || Serial.availableForWrite() < frameLen) {
+    txDropped++;
+    return;
+  }
+
   Serial.write(PROTOCOL_STX);
   Serial.print(body);
   Serial.write('|');
   Serial.print(crcHex);
   Serial.write(PROTOCOL_ETX);
 }
+
+uint32_t protocolDroppedFrames() { return txDropped; }
 
 void protocolSend0(const String& type) { protocolSend(type, nullptr, 0); }
 

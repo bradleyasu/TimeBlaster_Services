@@ -31,11 +31,17 @@ struct Message {
 // CRC-8, polynomial 0x07, init 0x00.
 uint8_t protocolCRC8(const char* data, size_t len);
 
-// Sending. Each returns after the frame has been written to Serial.
+// Sending. Each returns once the frame has been written to Serial, or
+// immediately without sending if the transmit buffer has no room for it -- see
+// protocolDroppedFrames. Nothing here ever blocks waiting for the host.
 void protocolSend(const String& type, const String* args, uint8_t argc);
 void protocolSend0(const String& type);
 void protocolSend1(const String& type, const String& a);
 void protocolSend2(const String& type, const String& a, const String& b);
+
+// protocolDroppedFrames counts frames abandoned because the USB CDC transmit
+// buffer was full, rather than blocking loop() waiting for the host.
+uint32_t protocolDroppedFrames();
 
 // protocolPoll reads available bytes and invokes handler for each complete,
 // checksum-valid frame. Anything before an STX is discarded, which is how the

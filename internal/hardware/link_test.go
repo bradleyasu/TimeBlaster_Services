@@ -619,3 +619,82 @@ func TestResyncReassertsTheDisplayState(t *testing.T) {
 	}
 	t.Fatal("the resync never sent a display brightness")
 }
+
+func TestLinkIsNotLiveUntilTheNanoSpeaks(t *testing.T) {
+	// The bug this guards: an open port was reported as a healthy Nano. A wedged
+	// board still enumerates and still accepts an open, so a device whose
+	// firmware had been silent for 15 hours showed OK on the status page --
+	// green except for one blink per reconnect.
+	cfg := DefaultConfig()
+	f, nanos := newLinkFixture(t, cfg, 1)
+	nano := newNanoSide(t, nanos[0])
+
+	waitUntil(t, "the port to open", f.link.Connected)
+
+	if f.link.Live() {
+		t.Error("reported live before the Nano had said anything")
+	}
+	st := f.link.Status()
+	if !st.Connected {
+		t.Error("the port is open, so Connected should be true")
+	}
+	if st.Live {
+		t.Error("Status reported Live for a Nano that has never spoken")
+	}
+	if !st.LastMessageAt.IsZero() {
+		t.Errorf("LastMessageAt was stamped without a message: %v", st.LastMessageAt)
+	}
+
+	// One word from the Nano is all it takes.
+	nano.send(protocol.Ping(1, time.Second))
+	waitUntil(t, "liveness", f.link.Live)
+}
+
+func TestLinkStopsBeingLiveWhenTheNanoGoesQuiet(t *testing.T) {
+	cfg := DefaultConfig()
+	// Keep the heartbeat from tearing the session down, so this exercises
+	// liveness reporting rather than reconnection.
+	cfg.HeartbeatTimeout = 4 * time.Second
+	f, nanos := newLinkFixture(t, cfg, 1)
+	nano := newNanoSide(t, nanos[0])
+
+	waitUntil(t, "the port to open", f.link.Connected)
+	nano.send(protocol.Ping(1, time.Second))
+	waitUntil(t, "liveness", f.link.Live)
+
+	// Say nothing and let the window lapse.
+	f.clock.Advance(cfg.HeartbeatTimeout + time.Second)
+	if f.link.Live() {
+		t.Error("still reported live after the heartbeat window lapsed in silence")
+	}
+	if st := f.link.Status(); st.Live {
+		t.Error("Status disagreed with Live")
+	}
+}
+
+func TestLinkLivenessResetsAcrossAReconnect(t *testing.T) {
+	// A reconnect must not inherit the previous session's liveness: that is
+	// exactly how a mute Nano stayed green through 6594 reconnects.
+	cfg := DefaultConfig()
+	cfg.HeartbeatTimeout = 4 * time.Second
+	cfg.ReconnectMin = time.Millisecond
+	cfg.ReconnectMax = 2 * time.Millisecond
+	f, nanos := newLinkFixture(t, cfg, 2)
+	nano := newNanoSide(t, nanos[0])
+
+	waitUntil(t, "the port to open", f.link.Connected)
+	nano.send(protocol.Ping(1, time.Second))
+	waitUntil(t, "liveness", f.link.Live)
+
+	// Drop the session; the opener hands out a second, silent pipe.
+	nanos[0].Close()
+	waitUntil(t, "disconnect", func() bool { return !f.link.Connected() })
+	// The reconnect backoff sleeps on the fake clock.
+	waitUntil(t, "backoff timer", func() bool { return f.clock.Waiters() > 0 })
+	f.clock.Advance(time.Second)
+	waitUntil(t, "reconnection", f.link.Connected)
+
+	if f.link.Live() {
+		t.Error("a reconnected but silent Nano was reported live")
+	}
+}

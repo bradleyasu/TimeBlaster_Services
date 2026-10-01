@@ -97,7 +97,13 @@ func DefaultConfig() Config {
 
 // Status describes the link for the health endpoint.
 type Status struct {
-	Connected       bool      `json:"connected"`
+	// Connected means the serial port is open. It does not mean the Nano is
+	// answering -- see Live.
+	Connected bool `json:"connected"`
+	// Live means the Nano has actually spoken recently. This is the field worth
+	// showing a user: a firmware that stops transmitting leaves Connected true
+	// forever while the link is, in every way that matters, down.
+	Live            bool      `json:"live"`
 	Device          string    `json:"device,omitempty"`
 	Firmware        string    `json:"firmware,omitempty"`
 	ConnectedAt     time.Time `json:"connected_at,omitzero"`
@@ -188,8 +194,27 @@ func (l *Link) SetLifecycle(h LifecycleHook) {
 	l.mu.Unlock()
 }
 
-// Connected reports whether the Nano is reachable.
+// Connected reports whether the serial port is open.
 func (l *Link) Connected() bool { return l.connected.Load() }
+
+// Live reports whether the Nano has sent anything within the heartbeat window.
+func (l *Link) Live() bool {
+	l.mu.RLock()
+	last := l.status.LastMessageAt
+	l.mu.RUnlock()
+	return l.liveAt(last)
+}
+
+// liveAt is the shared rule, so Live and Status cannot drift apart.
+func (l *Link) liveAt(last time.Time) bool {
+	if !l.connected.Load() || last.IsZero() {
+		return false
+	}
+	if l.cfg.HeartbeatTimeout <= 0 {
+		return true
+	}
+	return l.clock.Since(last) <= l.cfg.HeartbeatTimeout
+}
 
 // Status returns a snapshot for the health endpoint.
 func (l *Link) Status() Status {
@@ -197,6 +222,7 @@ func (l *Link) Status() Status {
 	defer l.mu.RUnlock()
 	s := l.status
 	s.Connected = l.connected.Load()
+	s.Live = l.liveAt(s.LastMessageAt)
 	return s
 }
 
@@ -266,7 +292,11 @@ func (l *Link) session(ctx context.Context, t serialport.Transport, device strin
 	l.mu.Lock()
 	l.status.Device = device
 	l.status.ConnectedAt = now
-	l.status.LastMessageAt = now
+	// LastMessageAt is deliberately NOT stamped here. Opening the port proves
+	// nothing about the Nano: a wedged board still enumerates and still accepts
+	// an open, so stamping it made "has never said a word" look identical to
+	// "answered a moment ago".
+	l.status.LastMessageAt = time.Time{}
 	l.status.LastError = ""
 	l.mu.Unlock()
 	l.connected.Store(true)

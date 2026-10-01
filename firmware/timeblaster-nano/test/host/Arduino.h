@@ -116,6 +116,11 @@ class SerialStub {
   }
   void resetReader() { readPos_ = 0; }
 
+  // Mirrors USB CDC: the host test sets the free space to model a buffer the
+  // host has stopped draining.
+  int availableForWrite() const { return writeRoom_; }
+  void setWriteRoom(int n) { writeRoom_ = n; }
+
   void write(char c) { hosttest::serialOut.push_back(c); }
   void write(uint8_t c) { hosttest::serialOut.push_back((char)c); }
   void print(const String& s) { hosttest::serialOut += s.str(); }
@@ -123,6 +128,7 @@ class SerialStub {
 
  private:
   size_t readPos_ = 0;
+  int writeRoom_ = 4096;
 };
 
 extern SerialStub Serial;

@@ -436,6 +436,38 @@ static void testFrameEncoding() {
   check(hosttest::serialOut.find("TB1|1|POT") != std::string::npos, "sequence advances");
 }
 
+static void testFullBufferDropsRatherThanBlocks() {
+  section("transmit buffer exhaustion");
+
+  hosttest::reset();
+  Serial.setWriteRoom(4096);
+  const uint32_t before = protocolDroppedFrames();
+  protocolSend2("POT", "0", "742");
+  check(!hosttest::serialOut.empty(), "a frame is sent when there is room");
+  check(protocolDroppedFrames() == before, "nothing is dropped when there is room");
+
+  // The host has stopped reading, so the USB CDC buffer has no space. The real
+  // Serial.write would block here and stall loop() -- which is how the Nano went
+  // silent for 15 hours while still enumerating on the bus.
+  hosttest::serialOut.clear();
+  Serial.setWriteRoom(0);
+  protocolSend2("POT", "0", "742");
+  check(hosttest::serialOut.empty(), "no bytes are written when the buffer is full");
+  check(protocolDroppedFrames() == before + 1, "the dropped frame is counted");
+
+  // A partial frame would desynchronise the Go decoder, so it must be all or
+  // nothing: room for most of a frame is still not enough.
+  hosttest::serialOut.clear();
+  Serial.setWriteRoom(8);
+  protocolSend2("POT", "0", "742");
+  check(hosttest::serialOut.empty(), "a frame that only partly fits is not started");
+
+  // Once the host drains, sending resumes.
+  Serial.setWriteRoom(4096);
+  protocolSend2("POT", "0", "742");
+  check(!hosttest::serialOut.empty(), "sending resumes once the buffer drains");
+}
+
 static void testFrameEscaping() {
   section("protocol escaping");
 
@@ -662,6 +694,7 @@ int main() {
   testLoadingUntilSynced();
   testCRCKnownVector();
   testFrameEncoding();
+  testFullBufferDropsRatherThanBlocks();
   testFrameEscaping();
   testFrameDecoding();
   testCorruptFramesAreDropped();

@@ -150,6 +150,7 @@ type Health struct {
 // HealthDetails carries the few values worth seeing alongside the summary.
 type HealthDetails struct {
 	NanoConnected       bool   `json:"nano_connected"`
+	NanoLive            bool   `json:"nano_live"`
 	ErsatzTVReachable   bool   `json:"ersatztv_reachable"`
 	PlayerAlive         bool   `json:"tv_player_alive"`
 	AlarmDeviceReady    bool   `json:"alarm_audio_device_available"`
