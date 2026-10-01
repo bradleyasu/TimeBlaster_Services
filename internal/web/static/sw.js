@@ -5,14 +5,17 @@
  * than no alarm list, because it would show the user something that is not true
  * about their alarm clock.
  */
-var CACHE = 'timeblaster-v1';
+// Bumped when the shell list changes, so activate() can drop the old cache.
+var CACHE = 'timeblaster-v2';
+// addAll is all or nothing: one missing entry rejects the whole install and the
+// worker never activates, so every path here must exist.
 var SHELL = [
   './',
   'index.html',
   'app.css',
   'app.js',
   'manifest.webmanifest',
-  'assets/icon.svg'
+  'assets/icon-192.png'
 ];
 
 self.addEventListener('install', function (e) {

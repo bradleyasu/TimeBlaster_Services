@@ -168,3 +168,47 @@ func funcBody(t *testing.T, js, name string) string {
 	t.Fatalf("function %s is not brace-balanced", name)
 	return ""
 }
+
+func TestServiceWorkerPrecachesOnlyFilesThatExist(t *testing.T) {
+	// caches.addAll rejects the whole install if any single entry 404s, so one
+	// stale path stops the worker activating at all -- silently, because the
+	// registration failure is caught and ignored by design.
+	sw := readStatic(t, "sw.js")
+	m := regexp.MustCompile(`(?s)var SHELL = \[(.*?)\]`).FindStringSubmatch(sw)
+	if m == nil {
+		t.Fatal("sw.js has no SHELL list")
+	}
+
+	paths := regexp.MustCompile(`'([^']+)'`).FindAllStringSubmatch(m[1], -1)
+	if len(paths) == 0 {
+		t.Fatal("the SHELL list is empty; has sw.js changed?")
+	}
+
+	for _, p := range paths {
+		name := p[1]
+		if name == "./" {
+			continue // the page itself, served by the router rather than a file
+		}
+		if _, err := embeddedStatic.ReadFile("static/" + name); err != nil {
+			t.Errorf("sw.js precaches %q, which is not in static/: %v", name, err)
+		}
+	}
+}
+
+func TestMarkupAndManifestReferenceIconsThatExist(t *testing.T) {
+	// A missing icon is a broken install prompt and a blank home-screen tile,
+	// neither of which errors anywhere a user would see.
+	for _, file := range []string{"index.html", "manifest.webmanifest"} {
+		body := readStatic(t, file)
+		refs := regexp.MustCompile(`assets/[-\w.]+\.(?:png|svg|webp)`).FindAllString(body, -1)
+		if len(refs) == 0 {
+			t.Errorf("%s references no icons at all", file)
+			continue
+		}
+		for _, ref := range refs {
+			if _, err := embeddedStatic.ReadFile("static/" + ref); err != nil {
+				t.Errorf("%s references %q, which is not in static/", file, ref)
+			}
+		}
+	}
+}
