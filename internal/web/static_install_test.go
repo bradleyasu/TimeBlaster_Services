@@ -212,3 +212,95 @@ func TestMarkupAndManifestReferenceIconsThatExist(t *testing.T) {
 		}
 	}
 }
+
+// The offline overlay is what the app shows when the Timeblaster cannot be
+// reached. It is the only screen a user sees in that state, so the ways it could
+// fail -- never appearing, never leaving, or appearing over a working app -- are
+// all invisible until someone is standing in the wrong place with a phone.
+
+func TestOfflineOverlayIsHiddenInTheMarkup(t *testing.T) {
+	html := readStatic(t, "index.html")
+	tag := regexp.MustCompile(`<section[^>]*id="offline"[^>]*>`).FindString(html)
+	if tag == "" {
+		t.Fatal("index.html has no offline section")
+	}
+	if !strings.Contains(tag, "hidden") {
+		t.Errorf("the offline overlay is not hidden in the markup, so it covers a working app: %s", tag)
+	}
+}
+
+func TestOfflineOverlayCoversTheApp(t *testing.T) {
+	// Every control underneath needs the device, so a half-covering overlay
+	// would leave buttons reachable that can only fail.
+	css := readStatic(t, "app.css")
+	rule := regexp.MustCompile(`\.offline\s*\{[^}]*\}`).FindString(css)
+	if rule == "" {
+		t.Fatal("app.css has no .offline rule")
+	}
+	for _, want := range []string{"position", "fixed", "inset", "z-index"} {
+		if !strings.Contains(rule, want) {
+			t.Errorf(".offline does not set %q, so it may not cover the app: %s", want, rule)
+		}
+	}
+}
+
+func TestConnectionLossArmsAndClearsTheOverlay(t *testing.T) {
+	// setConnected is the single place the socket reports its state, so both
+	// directions have to be handled there or the overlay sticks.
+	js := readStatic(t, "app.js")
+	body := funcBody(t, js, "setConnected")
+	if !strings.Contains(body, "hideOffline()") {
+		t.Error("setConnected never hides the overlay, so it would stay up after reconnecting")
+	}
+	if !strings.Contains(body, "scheduleOffline()") {
+		t.Error("setConnected never arms the overlay, so losing the device shows nothing")
+	}
+
+	// A failed WebSocket constructor must report the loss too: onclose cannot
+	// fire for a socket that never opened.
+	//
+	// Checked against the catch block rather than the whole of connect(): the
+	// first version of this searched the function and matched the
+	// setConnected(false) inside the onclose handler, so it passed with the
+	// catch reporting nothing.
+	conn := funcBody(t, js, "connect")
+	catch := regexp.MustCompile(`(?s)catch\s*\([^)]*\)\s*\{(.*?)\n    \}`).FindStringSubmatch(conn)
+	if catch == nil {
+		t.Fatal("connect() has no catch block around the WebSocket constructor")
+	}
+	if !strings.Contains(catch[1], "setConnected(false)") {
+		t.Error("connect()'s catch does not report the failure, so a constructor that throws never shows the overlay")
+	}
+}
+
+func TestOfflineOverlayWaitsBeforeAppearing(t *testing.T) {
+	// Without a grace period an ordinary one-second reconnect would flash a
+	// full-screen failure over a working app.
+	js := readStatic(t, "app.js")
+	if !regexp.MustCompile(`OFFLINE_GRACE_MS\s*=\s*(\d+)`).MatchString(js) {
+		t.Fatal("no OFFLINE_GRACE_MS")
+	}
+	body := funcBody(t, js, "scheduleOffline")
+	if !strings.Contains(body, "setTimeout") {
+		t.Error("scheduleOffline shows the overlay immediately; a brief reconnect would flash it")
+	}
+	if !strings.Contains(body, "navigator.onLine") {
+		t.Error("scheduleOffline ignores navigator.onLine, so a phone with no network waits out the full grace period for nothing")
+	}
+}
+
+func TestRetryIsOfferedAndResetsTheBackoff(t *testing.T) {
+	// The reconnect backoff grows to twenty seconds, so without a retry the user
+	// can be left staring at the overlay long after walking back in range.
+	js := readStatic(t, "app.js")
+	body := funcBody(t, js, "retryNow")
+	if !strings.Contains(body, "wsBackoff = 1000") {
+		t.Error("retryNow does not reset the backoff, so the retry may do nothing for twenty seconds")
+	}
+	if !strings.Contains(body, "connect()") {
+		t.Error("retryNow does not reconnect")
+	}
+	if !strings.Contains(js, "btn-offline-retry") {
+		t.Error("nothing wires the retry button")
+	}
+}

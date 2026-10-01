@@ -38,6 +38,22 @@
     <button class="btn wide ghost" id="btn-install-continue" hidden>CONTINUE IN BROWSER</button>
   </section>
 
+  <!-- Covers the app whenever the Timeblaster cannot be reached. Every control
+       underneath needs the device to do anything, so showing them greyed and
+       failing would be worse than saying plainly that it is unreachable. The
+       app's state is left intact underneath, so coming back is instant. -->
+  <section class="offline" id="offline" hidden>
+    <div class="offline-inner">
+      <img class="offline-mark" src="assets/icon-192.png" alt="" width="104" height="104">
+      <h1 class="offline-title">Can&rsquo;t reach the Timeblaster</h1>
+      <p class="offline-body" id="offline-body">
+        Check that you are on the same Wi-Fi network as the Timeblaster, and that it is powered on.
+      </p>
+      <p class="offline-seen" id="offline-seen" hidden></p>
+      <button class="btn wide" id="btn-offline-retry">TRY AGAIN</button>
+    </div>
+  </section>
+
   <!-- The ringing-alarm banner takes over the top of the screen, because when it
        is showing there is exactly one thing the user wants to do. -->
   <section class="ringing" id="ringing" hidden>

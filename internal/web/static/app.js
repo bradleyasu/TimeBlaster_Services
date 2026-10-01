@@ -77,6 +77,10 @@
     try {
       ws = new WebSocket(proto + '//' + location.host + '/api/ws');
     } catch (e) {
+      // The constructor itself can throw -- a blocked or malformed URL, or no
+      // network at all. Without reporting it here the only path that arms the
+      // offline overlay is onclose, which never fires because nothing opened.
+      setConnected(false);
       scheduleReconnect();
       return;
     }
@@ -102,10 +106,75 @@
     wsBackoff = Math.min(wsBackoff * 2, 20000);
   }
 
+  // --- Reachability ---------------------------------------------------------
+
+  // How long the socket may be down before the overlay appears.
+  //
+  // Two values, because the two situations look identical to the code and very
+  // different to the user. Once a session has connected, a drop is usually a
+  // reconnect that resolves in a second or two, and flashing a full-screen
+  // panic over it would be worse than the blip. On a cold start that has never
+  // connected, waiting is just an empty app with nothing to explain it.
+  var OFFLINE_GRACE_MS = 8000;
+  var OFFLINE_GRACE_FIRST_MS = 2500;
+
+  var offlineTimer = null;
+  var everConnected = false;
+  var lastSeenAt = null;
+
   function setConnected(up) {
     var el = $('conn');
     el.className = 'conn' + (up ? ' up' : '');
     el.title = up ? 'Connected to the Timeblaster' : 'Reconnecting…';
+
+    if (up) {
+      everConnected = true;
+      lastSeenAt = Date.now();
+      clearOfflineTimer();
+      hideOffline();
+      return;
+    }
+    scheduleOffline();
+  }
+
+  function clearOfflineTimer() {
+    if (offlineTimer !== null) { clearTimeout(offlineTimer); offlineTimer = null; }
+  }
+
+  function scheduleOffline() {
+    if (offlineTimer !== null || !$('offline').hidden) return;
+    // The browser already knows there is no network, so there is nothing to
+    // wait for and no point pretending to reconnect.
+    if (navigator.onLine === false) { showOffline(); return; }
+    var wait = everConnected ? OFFLINE_GRACE_MS : OFFLINE_GRACE_FIRST_MS;
+    offlineTimer = setTimeout(function () { offlineTimer = null; showOffline(); }, wait);
+  }
+
+  function showOffline() {
+    $('offline-seen').hidden = lastSeenAt === null;
+    if (lastSeenAt !== null) {
+      $('offline-seen').textContent = 'Last reached at ' + formatTime(new Date(lastSeenAt));
+    }
+    // Said plainly rather than blamed on the device: from here the two are
+    // indistinguishable, and the usual cause is simply being somewhere else.
+    $('offline-body').textContent = navigator.onLine === false
+      ? 'This device has no network connection.'
+      : 'Check that you are on the same Wi-Fi network as the Timeblaster, and that it is powered on.';
+    $('offline').hidden = false;
+  }
+
+  function hideOffline() {
+    $('offline').hidden = true;
+  }
+
+  // retryNow gives the user something to do rather than waiting out the backoff,
+  // which by then may be twenty seconds long.
+  function retryNow() {
+    clearOfflineTimer();
+    wsBackoff = 1000;
+    try { if (ws) ws.close(); } catch (e) { /* already gone */ }
+    connect();
+    refresh().then(loadAlarms).catch(function () { /* the overlay stays up */ });
   }
 
   function handleEvent(msg) {
@@ -905,10 +974,23 @@
         .catch(fail);
     });
 
+    $('btn-offline-retry').addEventListener('click', retryNow);
+
+    // The browser's own view of connectivity. onLine going false is immediate
+    // and certain; going true only means an interface came up, so it is a
+    // prompt to retry rather than proof the Timeblaster is there.
+    window.addEventListener('offline', function () { scheduleOffline(); });
+    window.addEventListener('online', retryNow);
+
     // Refetch when the app returns to the foreground: a phone suspends the
     // socket, and the user expects the clock to be right the instant they look.
     document.addEventListener('visibilitychange', function () {
-      if (!document.hidden) { refresh(); loadAlarms(); }
+      if (!document.hidden) {
+        refresh(); loadAlarms();
+        // Coming back from the background is the moment a stale socket is most
+        // likely, and the most likely moment for the user to be somewhere else.
+        if (!ws || ws.readyState !== 1) retryNow();
+      }
     });
   }
 
