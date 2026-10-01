@@ -344,3 +344,50 @@ input, textarea, [contenteditable] {
   -webkit-user-select: text;
   user-select: text;
 }
+
+/* --- Install gate ---------------------------------------------------------
+
+   While body.gated is set the app is not merely hidden, it is never started:
+   no socket, no polling, no API calls. These rules make sure nothing else in
+   the page is reachable either, including the tab bar and the top-bar
+   connection dot, which would otherwise sit there looking broken. */
+body.gated main > *:not(#install-gate),
+body.gated .tabs,
+body.gated .conn { display: none !important; }
+
+.install-gate {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 28px 18px 32px;
+  gap: 0;
+}
+.install-mark { margin-bottom: 18px; }
+.install-mark img { display: block; }
+.install-title {
+  margin: 0 0 10px;
+  font-size: 19px;
+  font-weight: 700;
+  color: var(--green);
+  letter-spacing: .04em;
+}
+.install-why { margin: 0 0 20px; font-size: 13px; color: var(--muted); max-width: 30em; }
+.install-steps {
+  margin: 0 0 8px;
+  padding-left: 22px;
+  text-align: left;
+  max-width: 30em;
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--text);
+}
+.install-steps li { margin-bottom: 6px; }
+.install-steps strong { color: var(--green); font-weight: 700; }
+.install-note {
+  margin: 14px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+  max-width: 30em;
+}
+.install-gate .btn.wide { max-width: 22em; }

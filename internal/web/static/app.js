@@ -925,7 +925,207 @@
     // guide rows in quick succession would lose the second one.
   }
 
-  function start() {
+  // --- Install gate -------------------------------------------------------
+
+  // installPrompt holds Chromium's beforeinstallprompt event so the gate can
+  // offer a real one-tap install. Registered at the top level rather than inside
+  // start(), because the event can fire before DOM ready and is not replayed.
+  var installPrompt = null;
+  window.addEventListener('beforeinstallprompt', function (e) {
+    e.preventDefault();
+    installPrompt = e;
+    var btn = document.getElementById('btn-install');
+    if (btn && document.body.classList.contains('gated')) btn.hidden = false;
+  });
+
+  // The escape hatch. Detection cannot be perfect across every browser, and
+  // getting it wrong would leave the only interface to the device unreachable,
+  // so "?browser=1" always gets in. Remembered for the session so a reload does
+  // not throw the user straight back out.
+  var BROWSER_OVERRIDE = 'browser=1';
+  var OVERRIDE_KEY = 'tb.allowBrowser';
+
+  function rememberOverride() {
+    try { sessionStorage.setItem(OVERRIDE_KEY, '1'); } catch (e) { /* not essential */ }
+  }
+
+  function overrideActive() {
+    if (location.search.indexOf(BROWSER_OVERRIDE) !== -1) {
+      rememberOverride();
+      return true;
+    }
+    try {
+      return sessionStorage.getItem(OVERRIDE_KEY) === '1';
+    } catch (e) {
+      return false; // private mode, or storage blocked
+    }
+  }
+
+  // isInstalled reports whether this page was launched as an installed app.
+  //
+  // Two mechanisms, because neither covers everything: display-mode is the
+  // standard and is what Android and desktop report, while navigator.standalone
+  // is the only signal older iOS gives.
+  function isInstalled() {
+    if (navigator.standalone === true) return true;
+    if (!window.matchMedia) return false;
+    var modes = ['standalone', 'fullscreen', 'minimal-ui'];
+    for (var i = 0; i < modes.length; i++) {
+      try {
+        if (window.matchMedia('(display-mode: ' + modes[i] + ')').matches) return true;
+      } catch (e) { /* older browsers reject the query */ }
+    }
+    return false;
+  }
+
+  // describePlatform works out which set of instructions to show.
+  //
+  // User-agent sniffing is the wrong tool for almost everything, but "which menu
+  // does this browser hide Add to Home Screen behind" is precisely a question
+  // about the browser, and nothing feature-detectable answers it.
+  function describePlatform() {
+    var ua = navigator.userAgent || '';
+    // iPadOS reports itself as a Mac, so touch points are the tell.
+    var iOS = /iPad|iPhone|iPod/.test(ua) ||
+      (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    // Every iOS browser is WebKit underneath, but only Safari can install.
+    var iOSOther = iOS && /CriOS|FxiOS|EdgiOS|OPiOS/.test(ua);
+    var firefox = !iOS && /Firefox/.test(ua);
+    var chromium = !iOS && /Chrome|Chromium|CrMo|Edg|SamsungBrowser|OPR/.test(ua);
+    return {
+      iOSSafari: iOS && !iOSOther,
+      iOSOther: iOSOther,
+      android: /Android/.test(ua),
+      firefox: firefox,
+      chromium: chromium,
+      // Chromium refuses to install from an insecure origin. The Timeblaster is
+      // served over plain HTTP, so on those browsers installing is unavailable
+      // however far the user digs through the menus.
+      secure: window.isSecureContext !== false,
+    };
+  }
+
+  // installAdvice returns what to tell the user, and whether installing is
+  // possible here at all.
+  function installAdvice() {
+    var p = describePlatform();
+
+    if (p.iOSSafari) {
+      // Safari's Add to Home Screen is a browser feature and works over plain
+      // HTTP, so iOS needs no caveat.
+      return {
+        possible: true,
+        steps: [
+          'Tap the <strong>Share</strong> button at the bottom of Safari.',
+          'Scroll down and tap <strong>Add to Home Screen</strong>.',
+          'Tap <strong>Add</strong>, then open Timeblaster from your home screen.',
+        ],
+      };
+    }
+    if (p.iOSOther) {
+      return {
+        possible: false,
+        note: 'Only Safari can add an app to the iOS home screen.',
+        steps: [
+          'Open <strong>Safari</strong> and go to this same address.',
+          'Tap <strong>Share</strong>, then <strong>Add to Home Screen</strong>.',
+        ],
+      };
+    }
+    if (p.chromium && p.secure) {
+      return {
+        possible: true,
+        steps: p.android ? [
+          'Open the browser menu (top right).',
+          'Tap <strong>Install app</strong>, or <strong>Add to Home screen</strong>.',
+          'Confirm, then open Timeblaster from your home screen.',
+        ] : [
+          'Click the <strong>install icon</strong> in the address bar, or open the browser menu.',
+          'Choose <strong>Install Timeblaster</strong>.',
+          'Launch it from your applications or desktop.',
+        ],
+      };
+    }
+    if (p.chromium && !p.secure) {
+      // The honest answer: Chromium will not install from http://, so there are
+      // no steps that would work here.
+      return {
+        possible: false,
+        note: 'This browser only installs apps from secure (HTTPS) addresses, and the Timeblaster is served over plain HTTP, so it cannot be installed here. On an iPhone or iPad, Safari can add it to the home screen over HTTP.',
+        steps: [],
+      };
+    }
+    if (p.firefox) {
+      return {
+        possible: false,
+        note: 'Firefox cannot install web apps on this platform. Use Safari on iOS, or a Chromium browser over HTTPS.',
+        steps: [],
+      };
+    }
+    return {
+      possible: false,
+      note: 'This browser may not support installing web apps. Look for "Add to Home Screen" or "Install" in its menu.',
+      steps: [],
+    };
+  }
+
+  // showInstallGate renders the gate and deliberately does not start the app:
+  // no socket, no polling, no API calls.
+  function showInstallGate() {
+    var advice = installAdvice();
+    document.body.classList.add('gated');
+    $('install-gate').hidden = false;
+
+    var list = $('install-steps');
+    list.innerHTML = '';
+    advice.steps.forEach(function (html) {
+      var li = document.createElement('li');
+      li.innerHTML = html; // fixed strings from installAdvice, never user input
+      list.appendChild(li);
+    });
+    list.hidden = advice.steps.length === 0;
+
+    if (advice.note) {
+      $('install-note').textContent = advice.note;
+      $('install-note').hidden = false;
+    }
+
+    // Chromium may have fired its prompt before this ran.
+    if (installPrompt) $('btn-install').hidden = false;
+    $('btn-install').addEventListener('click', function () {
+      if (!installPrompt) return;
+      installPrompt.prompt();
+      installPrompt = null;
+      $('btn-install').hidden = true;
+    });
+
+    // Only offered where the instructions cannot be followed. Without it a
+    // browser that physically cannot install would have no way in at all.
+    if (!advice.possible) {
+      var cont = $('btn-install-continue');
+      cont.hidden = false;
+      cont.addEventListener('click', function () {
+        rememberOverride();
+        location.reload();
+      });
+    }
+
+    // Reveal the app as soon as it is installed, without the user having to
+    // find a reload button.
+    window.addEventListener('appinstalled', function () { location.reload(); });
+    if (window.matchMedia) {
+      try {
+        var mq = window.matchMedia('(display-mode: standalone)');
+        var onChange = function (e) { if (e.matches) location.reload(); };
+        if (mq.addEventListener) mq.addEventListener('change', onChange);
+        else if (mq.addListener) mq.addListener(onChange);
+      } catch (e) { /* older browsers: the user can reload */ }
+    }
+
+    refuseZoomGestures();
+  }
+
+  function startApp() {
     wire();
     refuseZoomGestures();
     selectTab('alarms');
@@ -936,6 +1136,14 @@
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('sw.js').catch(function () { /* offline support is optional */ });
     }
+  }
+
+  function start() {
+    if (isInstalled() || overrideActive()) {
+      startApp();
+      return;
+    }
+    showInstallGate();
   }
 
   if (document.readyState === 'loading') {

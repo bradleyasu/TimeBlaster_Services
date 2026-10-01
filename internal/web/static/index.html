@@ -20,6 +20,24 @@
 </header>
 
 <main>
+  <!-- Shown instead of the app when the page is open in a browser rather than
+       launched from the home screen. Everything else in main is hidden while
+       body.gated is set, and the app is never wired up or connected, so this is
+       genuinely the only thing reachable. -->
+  <section class="install-gate" id="install-gate" hidden>
+    <div class="install-mark" aria-hidden="true">
+      <img src="assets/icon.svg" alt="" width="72" height="72">
+    </div>
+    <h1 class="install-title" id="install-title">Add Timeblaster to your home screen</h1>
+    <p class="install-why" id="install-why">
+      Timeblaster is designed to run as an app, not a web page.
+    </p>
+    <ol class="install-steps" id="install-steps"></ol>
+    <button class="btn wide" id="btn-install" hidden>INSTALL</button>
+    <p class="install-note" id="install-note" hidden></p>
+    <button class="btn wide ghost" id="btn-install-continue" hidden>CONTINUE IN BROWSER</button>
+  </section>
+
   <!-- The ringing-alarm banner takes over the top of the screen, because when it
        is showing there is exactly one thing the user wants to do. -->
   <section class="ringing" id="ringing" hidden>

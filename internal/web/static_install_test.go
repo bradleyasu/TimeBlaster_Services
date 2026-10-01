@@ -1,0 +1,170 @@
+package web
+
+import (
+	"regexp"
+	"strings"
+	"testing"
+)
+
+// The companion app refuses to run in a browser: opened as a web page it shows
+// installation instructions and nothing else. That makes the gate the only way
+// in, so a mistake in it does not degrade the app -- it removes it. These guards
+// cover the ways that could happen silently.
+
+var (
+	// Every element the script looks up by id.
+	idLookupRe = regexp.MustCompile(`(?:\$\(|getElementById\()'([a-zA-Z][-\w]*)'\)`)
+	// Every id defined in the markup.
+	idAttrRe = regexp.MustCompile(`id="([^"]+)"`)
+)
+
+func TestEveryElementTheScriptLooksUpExistsInTheMarkup(t *testing.T) {
+	// A typo'd id is a runtime TypeError on a null element. In the gate that
+	// means a blank screen with no way past it, so this is worth catching here
+	// rather than on a phone.
+	html := readStatic(t, "index.html")
+	js := readStatic(t, "app.js")
+
+	defined := map[string]bool{}
+	for _, m := range idAttrRe.FindAllStringSubmatch(html, -1) {
+		defined[m[1]] = true
+	}
+	if len(defined) == 0 {
+		t.Fatal("found no ids in index.html; has the markup changed?")
+	}
+
+	var missing []string
+	for _, m := range idLookupRe.FindAllStringSubmatch(js, -1) {
+		if !defined[m[1]] {
+			missing = append(missing, m[1])
+		}
+	}
+	if len(missing) > 0 {
+		t.Errorf("app.js looks up ids that index.html does not define: %v", missing)
+	}
+}
+
+func TestInstallGateIsHiddenInTheMarkup(t *testing.T) {
+	// It must not flash up for an installed app before the script runs.
+	html := readStatic(t, "index.html")
+	gate := regexp.MustCompile(`<section[^>]*id="install-gate"[^>]*>`).FindString(html)
+	if gate == "" {
+		t.Fatal("index.html has no install-gate section")
+	}
+	if !strings.Contains(gate, "hidden") {
+		t.Errorf("the install gate is not hidden in the markup: %s", gate)
+	}
+}
+
+func TestGatedBodyHidesEverythingElse(t *testing.T) {
+	// "Instructions only" is the requirement. Hiding the panels but leaving the
+	// tab bar or the connection dot would leave a half-app on screen.
+	css := readStatic(t, "app.css")
+	rule := regexp.MustCompile(`body\.gated[^{]*\{[^}]*display\s*:\s*none`).FindString(css)
+	if rule == "" {
+		t.Fatal("app.css has no body.gated rule hiding the app")
+	}
+	for _, sel := range []string{"main > *:not(#install-gate)", ".tabs", ".conn"} {
+		if !strings.Contains(rule, sel) {
+			t.Errorf("the body.gated rule does not cover %q: %s", sel, rule)
+		}
+	}
+}
+
+func TestGateDoesNotStartTheApp(t *testing.T) {
+	// The app must not connect, poll, or call the API while gated. If start()
+	// reached those directly, a browser would still be talking to the device.
+	js := readStatic(t, "app.js")
+
+	start := funcBody(t, js, "start")
+	for _, forbidden := range []string{"connect()", "wire()", "setInterval", "refresh()"} {
+		if strings.Contains(start, forbidden) {
+			t.Errorf("start() calls %s directly; it must only branch to startApp or the gate", forbidden)
+		}
+	}
+	if !strings.Contains(start, "isInstalled()") {
+		t.Error("start() does not check isInstalled()")
+	}
+	if !strings.Contains(start, "showInstallGate()") {
+		t.Error("start() never shows the gate")
+	}
+
+	// And the gate itself must not reach into the app.
+	gate := funcBody(t, js, "showInstallGate")
+	for _, forbidden := range []string{"connect()", "wire()", "startApp()"} {
+		if strings.Contains(gate, forbidden) {
+			t.Errorf("showInstallGate() calls %s, which starts the app it is meant to replace", forbidden)
+		}
+	}
+}
+
+func TestInstalledDetectionUsesBothMechanisms(t *testing.T) {
+	// display-mode alone misses older iOS, and navigator.standalone alone misses
+	// Android and desktop. Dropping either silently gates users who did install.
+	js := funcBody(t, readStatic(t, "app.js"), "isInstalled")
+	if !strings.Contains(js, "navigator.standalone") {
+		t.Error("isInstalled does not check navigator.standalone, so an older iOS home-screen app is treated as a browser")
+	}
+	if !strings.Contains(js, "display-mode") {
+		t.Error("isInstalled does not check display-mode, so an installed Android or desktop app is treated as a browser")
+	}
+}
+
+func TestThereIsAWayPastAWrongDetection(t *testing.T) {
+	// The gate is the only interface to the device. If detection is wrong on
+	// some browser, without an override the Timeblaster becomes unreachable from
+	// it, so the escape hatch is load-bearing rather than a convenience.
+	js := readStatic(t, "app.js")
+	// The assignment, not the string anywhere in the file: the first version of
+	// this check matched the explanatory comment and passed with the override
+	// broken.
+	if !regexp.MustCompile(`BROWSER_OVERRIDE\s*=\s*'browser=1'`).MatchString(js) {
+		t.Error("app.js has no ?browser=1 override; a detection bug would lock the user out entirely")
+	}
+	if !strings.Contains(funcBody(t, js, "start"), "overrideActive()") {
+		t.Error("start() does not honour the override")
+	}
+}
+
+func TestGateOffersAWayOutWhenInstallingIsImpossible(t *testing.T) {
+	// Chromium will not install from a plain-HTTP origin, which is how the
+	// Timeblaster is served. Showing steps that cannot work, with no way on,
+	// would be a dead end.
+	js := readStatic(t, "app.js")
+	advice := funcBody(t, js, "installAdvice")
+	if !strings.Contains(advice, "possible") {
+		t.Fatal("installAdvice does not report whether installing is possible")
+	}
+	if !strings.Contains(advice, "isSecureContext") && !strings.Contains(funcBody(t, js, "describePlatform"), "isSecureContext") {
+		t.Error("nothing checks isSecureContext, so Chromium over HTTP is told to install when it cannot")
+	}
+	gate := funcBody(t, js, "showInstallGate")
+	if !strings.Contains(gate, "advice.possible") {
+		t.Error("showInstallGate ignores whether installing is possible, so the continue button never appears")
+	}
+}
+
+// funcBody returns the source of a top-level `function name(...) { ... }` by
+// brace matching, so a test can assert on one function rather than the file.
+func funcBody(t *testing.T, js, name string) string {
+	t.Helper()
+	re := regexp.MustCompile(`function\s+` + regexp.QuoteMeta(name) + `\s*\([^)]*\)\s*\{`)
+	loc := re.FindStringIndex(js)
+	if loc == nil {
+		t.Fatalf("app.js has no function %s", name)
+	}
+	depth, start := 0, loc[1]-1
+	for i := start; i < len(js); i++ {
+		switch js[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return js[start : i+1]
+			}
+		}
+	}
+	t.Fatalf("function %s is not brace-balanced", name)
+	return ""
+}
