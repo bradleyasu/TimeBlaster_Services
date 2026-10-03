@@ -155,6 +155,12 @@ type Link struct {
 	// mute tracks a run of sessions in which the Nano said nothing, to keep a
 	// permanently wedged board from filling the journal. Run's goroutine owns it.
 	mute muteState
+
+	// txDroppedSeen marks the first drop count of a session as adopted rather
+	// than reported, and lastTxDropLog rate-limits the rest. Both are guarded
+	// by mu.
+	txDroppedSeen bool
+	lastTxDropLog time.Time
 }
 
 // Deps are the link's collaborators.
@@ -332,6 +338,8 @@ func (l *Link) session(ctx context.Context, t serialport.Transport, device strin
 	// "answered a moment ago".
 	l.status.LastMessageAt = time.Time{}
 	l.status.LastError = ""
+	// A fresh session adopts whatever count the Nano reports first.
+	l.txDroppedSeen = false
 	l.mu.Unlock()
 	l.connected.Store(true)
 
@@ -523,13 +531,7 @@ func (l *Link) dispatch(msg protocol.Message) {
 		// Newer firmware reports how many frames it has had to discard. Older
 		// firmware sends uptime alone, so a missing argument is not an error.
 		if dropped, err := msg.Int64Arg(1); err == nil {
-			l.mu.Lock()
-			if dropped != l.status.FirmwareTxDropped {
-				l.log.Warn("the Nano is discarding frames it cannot transmit",
-					"dropped", dropped, "previously", l.status.FirmwareTxDropped)
-			}
-			l.status.FirmwareTxDropped = dropped
-			l.mu.Unlock()
+			l.noteDroppedFrames(dropped)
 		}
 
 	case protocol.TypeHello:
@@ -766,6 +768,45 @@ func (l *Link) recordError(err error) {
 	l.mu.Lock()
 	l.status.LastError = err.Error()
 	l.mu.Unlock()
+}
+
+// How often a growing drop count may be reported. The Nano pings every two
+// seconds, so an unrate-limited warning would be thirty lines a minute.
+const txDropLogInterval = time.Minute
+
+// noteDroppedFrames records the Nano's own count of frames it could not send.
+//
+// Only growth during an established session is worth a word. The first count of
+// a session is almost always non-zero and almost always benign: the Nano pings
+// into the void whenever nothing has the port open, which is every moment
+// between it powering up and the daemon connecting, and every service restart.
+// Reporting that as a fault cried wolf on every boot.
+func (l *Link) noteDroppedFrames(dropped int64) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	previous := l.status.FirmwareTxDropped
+	l.status.FirmwareTxDropped = dropped
+
+	// First report of this session: adopt it as the baseline. The same applies
+	// when the count goes backwards, which means the Nano restarted and began
+	// counting again rather than anything going wrong.
+	if !l.txDroppedSeen || dropped < previous {
+		l.txDroppedSeen = true
+		return
+	}
+	if dropped == previous {
+		return
+	}
+
+	// Growing while we are listening: the firmware is generating frames it
+	// cannot get out, which is the symptom worth chasing.
+	if l.clock.Since(l.lastTxDropLog) < txDropLogInterval {
+		return
+	}
+	l.lastTxDropLog = l.clock.Now()
+	l.log.Warn("the Nano is discarding frames it cannot transmit",
+		"total", dropped, "since_last_report", dropped-previous)
 }
 
 // logDisconnect reports a lost session at a volume that suits how long the

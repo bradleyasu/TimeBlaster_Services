@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -868,6 +869,110 @@ func TestTheWedgedNanoSummaryEventuallyExplainsItself(t *testing.T) {
 	waitUntil(t, "the wedged-Nano diagnosis", func() bool {
 		return cap.countAtLeast(slog.LevelWarn, "probably wedged") >= 1
 	})
+}
+
+func TestDroppedFrameWarningOnlyFiresOnGrowth(t *testing.T) {
+	// The first count of a session is almost always non-zero and almost always
+	// benign: the Nano pings into the void whenever nothing holds the port open,
+	// which is every moment between it powering up and the daemon connecting.
+	// Reporting that cried wolf on every boot.
+	cfg := DefaultConfig()
+	// This test moves the clock past the rate-limit interval, which would
+	// otherwise take the heartbeat with it and tear the session down.
+	cfg.HeartbeatTimeout = time.Hour
+	cfg.ReconnectMin = time.Millisecond
+	cfg.ReconnectMax = 2 * time.Millisecond
+	cap := &capturingLogger{}
+	clk := system.NewFakeClock(time.Date(2026, 10, 2, 22, 0, 0, 0, time.UTC))
+
+	pi, nano := serialport.NewPipePair()
+	pi2, nano2 := serialport.NewPipePair()
+	link := NewLink(cfg, Deps{
+		Opener: serialport.NewPipeOpener(pi, pi2), Clock: clk, Logger: slog.New(cap),
+		Observer: newRecordingObserver(), Lifecycle: newRecordingLifecycle(),
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); _ = link.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Error("link Run did not stop")
+		}
+	})
+
+	peer := newNanoSide(t, nano)
+	waitUntil(t, "the port to open", link.Connected)
+
+	warns := func() int {
+		return cap.countAtLeast(slog.LevelWarn, "discarding frames")
+	}
+
+	// A large opening count is the startup backlog, not a fault.
+	peer.send(protocol.Message{Seq: 1, Type: protocol.TypePing, Args: []string{"1000", "233"}})
+	waitUntil(t, "the baseline", func() bool { return link.Status().FirmwareTxDropped == 233 })
+	if n := warns(); n != 0 {
+		t.Errorf("the opening count was reported as a fault (%d warnings)", n)
+	}
+
+	// Unchanged is silence.
+	peer.send(protocol.Message{Seq: 2, Type: protocol.TypePing, Args: []string{"3000", "233"}})
+	waitUntil(t, "the second ping", func() bool { return link.Status().MessagesRx >= 2 })
+	if n := warns(); n != 0 {
+		t.Errorf("a steady count was reported (%d warnings)", n)
+	}
+
+	// Growth while we are listening is the symptom worth a word.
+	peer.send(protocol.Message{Seq: 3, Type: protocol.TypePing, Args: []string{"5000", "240"}})
+	waitUntil(t, "the growth warning", func() bool { return warns() == 1 })
+
+	// But not once per ping: the Nano pings every two seconds.
+	for i := range 5 {
+		peer.send(protocol.Message{
+			Seq: 4 + i, Type: protocol.TypePing,
+			Args: []string{"7000", strconv.Itoa(250 + i*10)},
+		})
+	}
+	waitUntil(t, "the last ping", func() bool { return link.Status().FirmwareTxDropped >= 290 })
+	if n := warns(); n != 1 {
+		t.Errorf("growth was reported %d times inside one interval; want 1", n)
+	}
+
+	// Past the interval it speaks again.
+	clk.Advance(txDropLogInterval + time.Second)
+	peer.send(protocol.Message{Seq: 20, Type: protocol.TypePing, Args: []string{"9000", "400"}})
+	waitUntil(t, "the second warning", func() bool { return warns() == 2 })
+
+	// A count going backwards means the Nano restarted and began again, which is
+	// a recovery rather than a fault. The clock is moved past the interval first,
+	// or the rate limit would swallow the warning and this would pass without
+	// testing anything.
+	clk.Advance(txDropLogInterval + time.Second)
+	peer.send(protocol.Message{Seq: 21, Type: protocol.TypePing, Args: []string{"100", "0"}})
+	waitUntil(t, "the reset", func() bool { return link.Status().FirmwareTxDropped == 0 })
+	if n := warns(); n != 2 {
+		t.Errorf("a restarted Nano was reported as dropping frames (%d warnings)", n)
+	}
+
+	// A new session adopts its own opening count. Without a per-session reset
+	// the first ping after a reconnect is compared against the previous
+	// session's total, and a Nano that has been dropping frames while nothing
+	// was listening is announced as a fault the moment it comes back.
+	clk.Advance(txDropLogInterval + time.Second)
+	nano.Close()
+	waitUntil(t, "disconnect", func() bool { return !link.Connected() })
+	waitUntil(t, "backoff timer", func() bool { return clk.Waiters() > 0 })
+	clk.Advance(time.Second)
+	waitUntil(t, "reconnection", link.Connected)
+
+	peer2 := newNanoSide(t, nano2)
+	peer2.send(protocol.Message{Seq: 1, Type: protocol.TypePing, Args: []string{"500", "99"}})
+	waitUntil(t, "the new baseline", func() bool { return link.Status().FirmwareTxDropped == 99 })
+	if n := warns(); n != 2 {
+		t.Errorf("a new session's opening count was reported as a fault (%d warnings)", n)
+	}
 }
 
 func TestLinkRecordsTheNanosDroppedFrameCount(t *testing.T) {
