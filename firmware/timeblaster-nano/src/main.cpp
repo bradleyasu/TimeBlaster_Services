@@ -30,6 +30,7 @@
  */
 
 #include <Arduino.h>
+#include <esp_system.h>
 
 #include "Display.h"
 #include "Inputs.h"
@@ -49,6 +50,29 @@ static const uint32_t PING_INTERVAL_MS = 2000;
 static const uint32_t PI_TIMEOUT_MS = 10000;
 
 static uint32_t lastPiContact = 0;
+
+// --- Transmit recovery ------------------------------------------------------
+//
+// Twice now the USB CDC transmit path has died while everything else kept
+// running: the display updated, messages from the Pi still arrived, and nothing
+// the Nano sent ever got out again. It stayed that way until someone pressed
+// reset -- fifteen hours, the first time.
+//
+// The Nano cannot report this, because the report would travel the broken
+// direction. It can detect it, though: the Pi keeps talking, and nothing leaves.
+// A restart is the only cure that has ever worked, and it costs nothing -- the
+// Nano holds no state the Pi does not push again on HELLO.
+static const uint32_t TX_STALL_MS = 30000;
+// Capped so a fault the restart cannot fix becomes a dead link rather than a
+// display blinking off every half minute all night.
+static const uint32_t MAX_TX_RECOVERIES = 3;
+// Long enough to be sure the link really came back before handing the budget
+// back, rather than counting the first PING after a restart as success.
+static const uint32_t TX_HEALTHY_MS = 120000;
+
+// Survives ESP.restart(), cleared on a power-on reset in setup(), so the cap
+// counts consecutive failed recoveries rather than restarting forever.
+RTC_DATA_ATTR static uint32_t txRecoveries = 0;
 
 // --- Local clock ------------------------------------------------------------
 //
@@ -153,6 +177,13 @@ static void handleMessage(const Message& msg) {
 // --- Setup and loop ---------------------------------------------------------
 
 void setup() {
+  // RTC memory keeps its contents across a software restart but is undefined
+  // after power-on, so the recovery count is only meaningful once anchored to a
+  // reset that was not a cold boot.
+  if (esp_reset_reason() == ESP_RST_POWERON) {
+    txRecoveries = 0;
+  }
+
   Serial.begin(SERIAL_BAUD);
 
   displayInit();
@@ -179,7 +210,25 @@ void loop() {
   static uint32_t lastPing = 0;
   if (now - lastPing >= PING_INTERVAL_MS) {
     lastPing = now;
-    protocolSend1("PING", String(now));
+    // The dropped count rides along, so a transmit path that is discarding
+    // everything is visible in the Pi's link status. It is zero in normal
+    // operation, which is what makes a non-zero value worth looking at.
+    protocolSend2("PING", String(now), String(protocolDroppedFrames()));
+  }
+
+  // Still being spoken to, but nothing getting out: restart rather than sit
+  // mute until someone notices the knobs have stopped working.
+  if (protocolTxStalled(now, lastPiContact, TX_STALL_MS, PI_TIMEOUT_MS)) {
+    if (txRecoveries < MAX_TX_RECOVERIES) {
+      txRecoveries++;
+      displayTick();   // leave the display in a sane state on the way out
+      ESP.restart();
+    }
+  } else if (txRecoveries > 0 && now > TX_HEALTHY_MS &&
+             now - protocolLastTxOkMs() < PING_INTERVAL_MS * 2) {
+    // Sending has worked steadily since the restart, so the next fault gets a
+    // full budget again instead of inheriting an exhausted one.
+    txRecoveries = 0;
   }
 
   // If the Pi has gone quiet, re-announce ourselves so a restarted daemon picks

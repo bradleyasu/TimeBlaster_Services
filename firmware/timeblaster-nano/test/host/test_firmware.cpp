@@ -468,6 +468,64 @@ static void testFullBufferDropsRatherThanBlocks() {
   check(!hosttest::serialOut.empty(), "sending resumes once the buffer drains");
 }
 
+static void testTxStallDetection() {
+  section("transmit stall detection");
+
+  // The fault this exists for: the USB transmit path dies while everything else
+  // keeps running. The Nano cannot report that -- the report would travel the
+  // broken direction -- so it has to notice that the Pi is still talking while
+  // nothing it sends gets out.
+  const uint32_t STALL = 30000, FRESH = 10000;
+
+  hosttest::reset();
+  Serial.setWriteRoom(4096);
+  hosttest::nowMs = 1000;
+  protocolResetTxHealth(hosttest::nowMs);
+
+  // Sending normally: not stalled, however long we wait, as long as sends work.
+  hosttest::nowMs = 40000;
+  protocolSend1("PING", "40000");
+  check(!protocolTxStalled(hosttest::nowMs, hosttest::nowMs - 100, STALL, FRESH),
+        "a working transmitter is not stalled");
+
+  // The host stops draining. Every frame is now dropped. Twenty pings at the
+  // real two-second interval is forty seconds, comfortably past the timeout --
+  // ten was not, which is what the first version of this test got wrong.
+  Serial.setWriteRoom(0);
+  for (int i = 0; i < 20; i++) {
+    hosttest::nowMs += 2000;
+    protocolSend1("PING", "x");
+  }
+  check(protocolDroppedFrames() >= 20, "dropped frames are counted while stalled");
+  check(protocolTxStalled(hosttest::nowMs, hosttest::nowMs - 100, STALL, FRESH),
+        "a transmitter silent past the timeout, while still receiving, is stalled");
+
+  // The Pi going quiet as well is a stopped daemon, not a broken transmitter.
+  // Restarting over that would turn every deploy into a reboot.
+  check(!protocolTxStalled(hosttest::nowMs, hosttest::nowMs - (FRESH + 1), STALL, FRESH),
+        "both directions quiet is not treated as a stall");
+
+  // Never having heard from the Pi is a Nano running on its own, not a fault.
+  check(!protocolTxStalled(hosttest::nowMs, 0, STALL, FRESH),
+        "a Nano that has never heard the Pi is not stalled");
+
+  // Just short of the timeout is not yet a stall.
+  hosttest::nowMs = 100000;
+  protocolResetTxHealth(hosttest::nowMs);
+  hosttest::nowMs += STALL - 1;
+  check(!protocolTxStalled(hosttest::nowMs, hosttest::nowMs - 100, STALL, FRESH),
+        "a transmitter inside the timeout is not stalled");
+  hosttest::nowMs += 2;
+  check(protocolTxStalled(hosttest::nowMs, hosttest::nowMs - 100, STALL, FRESH),
+        "crossing the timeout is a stall");
+
+  // Recovery: once sending works again the stall clears on its own.
+  Serial.setWriteRoom(4096);
+  protocolSend1("PING", "ok");
+  check(!protocolTxStalled(hosttest::nowMs, hosttest::nowMs - 100, STALL, FRESH),
+        "a successful send clears the stall");
+}
+
 static void testFrameEscaping() {
   section("protocol escaping");
 
@@ -695,6 +753,7 @@ int main() {
   testCRCKnownVector();
   testFrameEncoding();
   testFullBufferDropsRatherThanBlocks();
+  testTxStallDetection();
   testFrameEscaping();
   testFrameDecoding();
   testCorruptFramesAreDropped();

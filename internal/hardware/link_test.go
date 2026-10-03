@@ -869,3 +869,28 @@ func TestTheWedgedNanoSummaryEventuallyExplainsItself(t *testing.T) {
 		return cap.countAtLeast(slog.LevelWarn, "probably wedged") >= 1
 	})
 }
+
+func TestLinkRecordsTheNanosDroppedFrameCount(t *testing.T) {
+	// A frame the Nano could not transmit is invisible from this side: it looks
+	// exactly like one that was never generated. The firmware counts them and
+	// reports the total in every PING, which is the only way the Pi can tell a
+	// quiet Nano from one whose transmit path is discarding everything.
+	cfg := DefaultConfig()
+	f, nanos := newLinkFixture(t, cfg, 1)
+	nano := newNanoSide(t, nanos[0])
+
+	waitUntil(t, "the port to open", f.link.Connected)
+
+	nano.send(protocol.Message{Seq: 1, Type: protocol.TypePing, Args: []string{"1000", "7"}})
+	waitUntil(t, "the dropped count", func() bool {
+		return f.link.Status().FirmwareTxDropped == 7
+	})
+
+	// Older firmware sends uptime alone. That must not be read as zero drops,
+	// nor as an error.
+	nano.send(protocol.Message{Seq: 2, Type: protocol.TypePing, Args: []string{"2000"}})
+	waitUntil(t, "the second ping", func() bool { return f.link.Status().MessagesRx >= 2 })
+	if got := f.link.Status().FirmwareTxDropped; got != 7 {
+		t.Errorf("a PING without the count overwrote it: %d", got)
+	}
+}

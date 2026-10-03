@@ -40,8 +40,27 @@ void protocolSend1(const String& type, const String& a);
 void protocolSend2(const String& type, const String& a, const String& b);
 
 // protocolDroppedFrames counts frames abandoned because the USB CDC transmit
-// buffer was full, rather than blocking loop() waiting for the host.
+// buffer was full, rather than blocking loop() waiting for the host. Reported
+// in every PING, so a transmit path that is quietly discarding everything is
+// visible from the Pi instead of only at the device.
 uint32_t protocolDroppedFrames();
+
+// protocolLastTxOkMs is millis() at the last frame actually written, or zero if
+// nothing has been sent yet.
+uint32_t protocolLastTxOkMs();
+
+// protocolTxStalled reports whether sending has stopped working while the Pi is
+// still being heard from.
+//
+// That asymmetry is the whole signal. A Nano that cannot transmit has no way to
+// report it, so it has to notice by itself: messages keep arriving, nothing
+// leaves, and the only cure is a restart.
+bool protocolTxStalled(uint32_t now, uint32_t lastRxMs,
+                       uint32_t txStallMs, uint32_t rxFreshMs);
+
+// protocolResetTxHealth forgets the transmit history, for tests and after a
+// deliberate re-initialisation.
+void protocolResetTxHealth(uint32_t now);
 
 // protocolPoll reads available bytes and invokes handler for each complete,
 // checksum-valid frame. Anything before an STX is discarded, which is how the

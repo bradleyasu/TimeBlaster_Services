@@ -112,8 +112,13 @@ type Status struct {
 	MessagesRx      int64     `json:"messages_received"`
 	MessagesTx      int64     `json:"messages_sent"`
 	MalformedFrames int64     `json:"malformed_frames"`
-	DroppedWrites   int64     `json:"dropped_writes"`
-	LastError       string    `json:"last_error,omitempty"`
+	// FirmwareTxDropped is the Nano's own count of frames it could not write,
+	// reported in every PING. Non-zero means its transmit path is discarding
+	// messages, which is otherwise invisible from this side: a frame that was
+	// never sent looks exactly like one that was never generated.
+	FirmwareTxDropped int64  `json:"firmware_tx_dropped"`
+	DroppedWrites     int64  `json:"dropped_writes"`
+	LastError         string `json:"last_error,omitempty"`
 }
 
 // Link is a supervised session with the Nano.
@@ -515,6 +520,17 @@ func (l *Link) dispatch(msg protocol.Message) {
 	case protocol.TypePing:
 		// Answering keeps the Nano's own liveness check satisfied.
 		l.enqueue(protocol.Pong(l.seq.Next()), false)
+		// Newer firmware reports how many frames it has had to discard. Older
+		// firmware sends uptime alone, so a missing argument is not an error.
+		if dropped, err := msg.Int64Arg(1); err == nil {
+			l.mu.Lock()
+			if dropped != l.status.FirmwareTxDropped {
+				l.log.Warn("the Nano is discarding frames it cannot transmit",
+					"dropped", dropped, "previously", l.status.FirmwareTxDropped)
+			}
+			l.status.FirmwareTxDropped = dropped
+			l.mu.Unlock()
+		}
 
 	case protocol.TypeHello:
 		firmware, hardware := msg.Arg(0), msg.Arg(1)

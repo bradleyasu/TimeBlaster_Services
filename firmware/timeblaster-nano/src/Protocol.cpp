@@ -2,8 +2,17 @@
 
 static uint16_t txSeq = 0;
 // Frames abandoned because the USB CDC buffer was full. Kept so a wedged host
-// is visible rather than silently lossy.
+// is visible rather than silently lossy, and reported in every PING so the Pi
+// can see it without anyone standing at the device.
 static uint32_t txDropped = 0;
+
+// When a frame was last actually written. Zero until the first send.
+//
+// This is what makes a dead transmit path detectable from inside the firmware.
+// The Nano cannot be told that nothing is arriving -- that message would travel
+// the broken direction -- but it can notice that it is still being spoken to
+// while nothing it sends gets out.
+static uint32_t txLastOkMs = 0;
 
 uint8_t protocolCRC8(const char* data, size_t len) {
   uint8_t crc = 0;
@@ -65,9 +74,33 @@ void protocolSend(const String& type, const String* args, uint8_t argc) {
   Serial.write('|');
   Serial.print(crcHex);
   Serial.write(PROTOCOL_ETX);
+  txLastOkMs = millis();
 }
 
 uint32_t protocolDroppedFrames() { return txDropped; }
+
+uint32_t protocolLastTxOkMs() { return txLastOkMs; }
+
+bool protocolTxStalled(uint32_t now, uint32_t lastRxMs,
+                       uint32_t txStallMs, uint32_t rxFreshMs) {
+  // The Pi has to have been heard from recently. Both directions idle is an
+  // absent or restarting daemon, not a broken transmitter, and restarting over
+  // that would turn every deploy into a reboot.
+  //
+  // This also covers a Nano that has never heard the Pi at all: lastRxMs is zero
+  // until the first message, so the gap is the whole uptime and far past any
+  // sensible freshness window. An explicit zero check sat here first and no test
+  // could reach it.
+  if (now - lastRxMs > rxFreshMs) return false;
+
+  // Still being spoken to, but nothing has left here in a long time.
+  return now - txLastOkMs > txStallMs;
+}
+
+void protocolResetTxHealth(uint32_t now) {
+  txLastOkMs = now;
+  txDropped = 0;
+}
 
 void protocolSend0(const String& type) { protocolSend(type, nullptr, 0); }
 
