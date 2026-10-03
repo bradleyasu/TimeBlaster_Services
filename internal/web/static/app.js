@@ -637,8 +637,7 @@
       $('set-timezone').value = s.timezone || '';
       $('set-clock24').checked = !!s.clock_24h;
       $('set-display-on').checked = !!s.display_on;
-      $('set-overlay').checked = !!s.channel_overlay_enabled;
-      fillSoundSelect($('set-sound'), s.default_sound_id);
+        fillSoundSelect($('set-sound'), s.default_sound_id);
       $('set-tv-audio').value = s.tv_audio_output || 'hdmi';
     }).catch(fail);
   }
@@ -650,7 +649,6 @@
     $('set-timezone').value = s.timezone || '';
     $('set-clock24').checked = !!s.clock_24h;
     $('set-display-on').checked = !!s.display_on;
-    $('set-overlay').checked = !!s.channel_overlay_enabled;
     $('set-tv-audio').value = s.tv_audio_output || 'hdmi';
     fillSoundSelect($('set-sound'), s.default_sound_id);
   }
@@ -676,7 +674,13 @@
       tv_audio_output: $('set-tv-audio').value,
       display_on: $('set-display-on').checked,
       default_sound_id: $('set-sound').value,
-      channel_overlay_enabled: $('set-overlay').checked
+      // The overlay has no control any more: it is always on. The field still
+      // has to be sent, because the device compares the whole settings document
+      // against what it holds and would read a missing value as false --
+      // switching the overlay off permanently, with nothing left to switch it
+      // back on. The setting itself is untouched on the device, so restoring
+      // the control is all that re-adding it would take.
+      channel_overlay_enabled: true
     }).then(function (s) {
       if (s) {
         savedSettings = s;
@@ -916,7 +920,7 @@
     // Every control saves itself. Matching the alarm list's switches, which
     // have always worked this way: act on change, say nothing on success, and
     // snap back with an explanation if the device refuses.
-    ['set-clock24', 'set-display-on', 'set-overlay', 'set-sound', 'set-tv-audio'].forEach(function (id) {
+    ['set-clock24', 'set-display-on', 'set-sound', 'set-tv-audio'].forEach(function (id) {
       $(id).addEventListener('change', function () { saveSettings(false); });
     });
     // The timezone fires on commit -- blur or Enter -- not on every keystroke.

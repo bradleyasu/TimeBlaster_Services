@@ -177,11 +177,30 @@ func TestSettingsTogglesUseTheSwitch(t *testing.T) {
 	// Bare checkboxes next to the alarm list's switches looked like two
 	// different applications.
 	html := readStatic(t, "index.html")
-	for _, id := range []string{"set-clock24", "set-display-on", "set-overlay"} {
+	for _, id := range []string{"set-clock24", "set-display-on"} {
 		want := `<span class="switch"><input type="checkbox" id="` + id + `">`
 		if !strings.Contains(html, want) {
 			t.Errorf("%s is not wrapped in a switch", id)
 		}
+	}
+}
+
+func TestTheOverlayStaysOnWithoutAControl(t *testing.T) {
+	// The channel-change overlay has no switch any more: it is always on. The
+	// field still has to be sent, though, and that is the trap. applySettings
+	// compares the whole document against what the device holds, so a missing
+	// bool decodes as false, differs from the stored true, and switches the
+	// overlay off -- permanently, because the control that could undo it is the
+	// one being removed.
+	html := readStatic(t, "index.html")
+	js := readStatic(t, "app.js")
+
+	if strings.Contains(html, "set-overlay") || strings.Contains(js, "set-overlay") {
+		t.Error("the overlay control was removed from one place but is still referenced in the other")
+	}
+	if !regexp.MustCompile(`channel_overlay_enabled\s*:\s*true`).MatchString(js) {
+		t.Error("the app no longer sends channel_overlay_enabled: true, so saving any " +
+			"other setting turns the overlay off and nothing can turn it back on")
 	}
 }
 
