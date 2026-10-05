@@ -45,6 +45,11 @@ func (f *FakeNano) SetAlarmActive(active bool) error {
 	return f.record(Command{Kind: "alarm", Flag: active})
 }
 
+// SetAlarmPending records an alarm-within-the-day state change.
+func (f *FakeNano) SetAlarmPending(pending bool) error {
+	return f.record(Command{Kind: "alarm-pending", Flag: pending})
+}
+
 // ShowText records a display text command.
 func (f *FakeNano) ShowText(text string) error {
 	return f.record(Command{Kind: "display-text", Text: text})

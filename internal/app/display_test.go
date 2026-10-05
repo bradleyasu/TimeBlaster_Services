@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"github.com/bradsheets/timeblaster/internal/alarm"
 	"strings"
 	"testing"
 	"time"
@@ -389,4 +390,77 @@ func lastSetProperty(p *mpv.Fake, name string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// lastAlarmPending returns the most recent alarm-point state pushed to the
+// Nano, and whether anything was pushed at all.
+func lastAlarmPending(h *harness) (bool, bool) {
+	cmds := h.nano.CommandsOfKind("alarm-pending")
+	if len(cmds) == 0 {
+		return false, false
+	}
+	return cmds[len(cmds)-1].Flag, true
+}
+
+func TestAlarmPointFollowsTheNextAlarm(t *testing.T) {
+	// The point answers one question -- "am I going to be woken up?" -- so it
+	// tracks whether the next alarm falls inside the next day, not whether any
+	// alarm exists.
+	now := time.Date(2026, 10, 5, 22, 40, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name string
+		next *alarm.Upcoming
+		want bool
+	}{
+		{"nothing scheduled", nil, false},
+		{
+			// The case from the example: 10:40pm, alarm at 7am tomorrow.
+			"tomorrow morning",
+			&alarm.Upcoming{At: now.Add(8*time.Hour + 20*time.Minute)}, true,
+		},
+		{"just inside the day", &alarm.Upcoming{At: now.Add(24*time.Hour - time.Minute)}, true},
+		{"exactly a day", &alarm.Upcoming{At: now.Add(24 * time.Hour)}, true},
+		{"just outside the day", &alarm.Upcoming{At: now.Add(24*time.Hour + time.Minute)}, false},
+		{"a week away", &alarm.Upcoming{At: now.Add(7 * 24 * time.Hour)}, false},
+		{
+			// The scheduler has not caught up yet; it is certainly within the day.
+			"already due",
+			&alarm.Upcoming{At: now.Add(-time.Minute)}, true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t, nil)
+			h.clock.SetNow(now)
+			h.nano.Reset()
+
+			h.app.pushAlarmPending(tc.next)
+
+			got, pushed := lastAlarmPending(h)
+			if !pushed {
+				t.Fatal("nothing was pushed to the Nano")
+			}
+			if got != tc.want {
+				t.Errorf("alarm point = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAlarmPointUpdatesWhenTheScheduleChanges(t *testing.T) {
+	// Editing an alarm should light or clear the point at once rather than up
+	// to half a minute later when the timer next comes round.
+	now := time.Date(2026, 10, 5, 22, 40, 0, 0, time.UTC)
+	h := newHarness(t, nil)
+	h.clock.SetNow(now)
+	h.nano.Reset()
+
+	h.app.ScheduleChanged(&alarm.Upcoming{At: now.Add(9 * time.Hour)})
+	if got, pushed := lastAlarmPending(h); !pushed || !got {
+		t.Errorf("scheduling an alarm for tomorrow did not light the point (pushed=%v, on=%v)", pushed, got)
+	}
+
+	h.app.ScheduleChanged(nil)
+	if got, pushed := lastAlarmPending(h); !pushed || got {
+		t.Errorf("clearing the schedule did not put the point out (pushed=%v, on=%v)", pushed, got)
+	}
 }

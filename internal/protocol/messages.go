@@ -43,6 +43,16 @@ func AlarmActive(seq int, active bool) Message {
 	return Message{Seq: seq, Type: TypeAlarm, Args: []string{"ACTIVE", boolArg(active)}}
 }
 
+// AlarmPending tells the Nano whether an alarm is due within the next day,
+// which lights the last digit's decimal point.
+//
+// A separate sub-type rather than a second argument to ACTIVE: firmware that
+// predates this ignores an ALARM it does not recognise, so an older Nano simply
+// never lights the point instead of misreading a ringing alarm.
+func AlarmPending(seq int, pending bool) Message {
+	return Message{Seq: seq, Type: TypeAlarm, Args: []string{"PENDING", boolArg(pending)}}
+}
+
 // DisplayText asks the Nano to show literal text instead of the clock.
 func DisplayText(seq int, text string) Message {
 	return Message{Seq: seq, Type: TypeDisplay, Args: []string{DisplaySubText, text}}

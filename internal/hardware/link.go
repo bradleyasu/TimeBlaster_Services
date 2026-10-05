@@ -30,6 +30,8 @@ type Nano interface {
 	SetTime(t time.Time) error
 	// SetAlarmActive tells the Nano whether an alarm is ringing.
 	SetAlarmActive(active bool) error
+	// SetAlarmPending tells the Nano whether an alarm is due within the day.
+	SetAlarmPending(pending bool) error
 	// ShowText displays literal text instead of the clock.
 	ShowText(text string) error
 	// ShowClock returns the display to normal.
@@ -142,9 +144,10 @@ type Link struct {
 	status Status
 	// alarmActive, displayText and clock24h hold the state to restore after a
 	// reconnect. The Nano keeps none of it across a replug.
-	alarmActive bool
-	displayText string
-	clock24h    bool
+	alarmActive  bool
+	alarmPending bool
+	displayText  string
+	clock24h     bool
 
 	connected atomic.Bool
 	// sessionLive records whether the current session has heard anything from
@@ -676,7 +679,7 @@ func (l *Link) clockReady() bool {
 func (l *Link) Resync() {
 	l.mu.RLock()
 	alarmActive, text, displayOn := l.alarmActive, l.displayText, l.cfg.DisplayOn
-	clock24h := l.clock24h
+	clock24h, alarmPending := l.clock24h, l.alarmPending
 	l.mu.RUnlock()
 
 	// Only if the Pi knows what time it is. Sending an unsynchronised clock
@@ -688,6 +691,12 @@ func (l *Link) Resync() {
 	_ = l.SetClock24h(clock24h)
 	_ = l.SetAlarmActive(alarmActive)
 	_ = l.SetLED(protocol.LEDAlarm, alarmActive)
+	// Forced rather than compared: the Nano forgot everything, so the cached
+	// value here no longer describes what is on the display.
+	l.mu.Lock()
+	l.alarmPending = !alarmPending
+	l.mu.Unlock()
+	_ = l.SetAlarmPending(alarmPending)
 	if text != "" {
 		_ = l.ShowText(text)
 	} else {
@@ -700,6 +709,22 @@ func (l *Link) Resync() {
 // SetTime synchronises the Nano's clock.
 func (l *Link) SetTime(t time.Time) error {
 	return l.enqueue(protocol.Time(l.seq.Next(), t), true)
+}
+
+// SetAlarmPending tells the Nano whether an alarm is due within the day.
+//
+// Not critical, unlike SetAlarmActive: a dot that is one minute late is a
+// cosmetic lag, while a ringing alarm that still looks dismissed is not, and
+// only one of those is worth pushing past a full queue.
+func (l *Link) SetAlarmPending(pending bool) error {
+	l.mu.Lock()
+	if l.alarmPending == pending {
+		l.mu.Unlock()
+		return nil // nothing changed; do not spend a queue slot
+	}
+	l.alarmPending = pending
+	l.mu.Unlock()
+	return l.enqueue(protocol.AlarmPending(l.seq.Next(), pending), false)
 }
 
 // SetAlarmActive tells the Nano whether an alarm is ringing.

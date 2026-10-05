@@ -539,6 +539,7 @@ func (a *App) registerTasks() {
 	a.sup.add("clock-broadcast", false, a.runClockBroadcast)
 	a.sup.add("sound-library-refresh", false, a.runLibraryRefresh)
 	a.sup.add("remote-access", false, a.applyRemoteAccessAtStartup)
+	a.sup.add("alarm-indicator", false, a.runAlarmIndicator)
 }
 
 // applyRemoteAccessAtStartup puts Raspberry Pi Connect back where the stored

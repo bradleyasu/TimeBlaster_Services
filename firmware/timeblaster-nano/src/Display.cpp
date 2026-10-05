@@ -30,6 +30,7 @@ static bool clockHasTime = false;
 static bool clock24h = false;
 
 static bool alarmActive   = false;
+static bool alarmPending  = false;
 static bool timeSynced    = false;
 static int  brightnessPct = 75;
 
@@ -134,6 +135,8 @@ void displaySetBrightness(int percent) {
   // hardware can honour.
 }
 
+void displaySetAlarmPending(bool pending) { alarmPending = pending; }
+
 void displaySetAlarmActive(bool active) {
   alarmActive = active;
   if (!active) {
@@ -173,6 +176,18 @@ static void buildClockText(char* out, size_t n, bool colonOn) {
     fmt = colonOn ? "%2d.%02d" : "%2d%02d";
   }
   snprintf(out, n, fmt, shown, clockMinute);
+
+  // The trailing point binds to the last digit rather than taking a cell, so
+  // this adds a marker without costing a digit. It is appended after
+  // formatting because the colon point comes and goes with the blink and this
+  // one must not.
+  if (alarmPending) {
+    size_t len = strlen(out);
+    if (len + 2 <= n) {
+      out[len] = '.';
+      out[len + 1] = '\0';
+    }
+  }
 }
 
 void displayTick() {

@@ -234,6 +234,51 @@ static void testClockRendering() {
   checkBytes(hosttest::lastFrame, {five, zero, two, one}, "12:05 renders as \"12.05\"");
 }
 
+static void testAlarmPendingDot() {
+  section("alarm pending dot");
+
+  setupChainCapture();
+  displayInit();
+  displaySetSynced(true);
+  displaySetBrightness(75);
+  displayShowClock();
+
+  const uint8_t DOT = 0b00000001;
+  // Segments are active low and so is the point: clearing the bit lights it.
+  auto lit   = [&](char c) { return (uint8_t)(~getCharacter(c) & (uint8_t)~DOT); };
+  auto dark  = [&](char c) { return (uint8_t)(~getCharacter(c) | DOT); };
+
+  // 10:40 in the second half of the second, so the colon point is dark and the
+  // only point that can be lit is the one under test.
+  hosttest::nowMs = 600;
+  displaySetTime(22, 40);
+  displaySetAlarmPending(false);
+  displayTick();
+  checkBytes(hosttest::lastFrame, {dark('0'), dark('4'), dark('0'), dark('1')},
+             "no alarm within the day leaves every point dark");
+
+  // The same minute with an alarm due: "10.40." -- the trailing point binds to
+  // the last digit rather than taking a cell, so no digit is lost.
+  displaySetAlarmPending(true);
+  displayTick();
+  checkBytes(hosttest::lastFrame, {lit('0'), dark('4'), dark('0'), dark('1')},
+             "an alarm within the day lights the last digit's point");
+
+  // It must not blink with the colon. Half a second earlier the colon is lit
+  // and the alarm point has to stay lit too.
+  hosttest::nowMs = 100;
+  displayTick();
+  checkBytes(hosttest::lastFrame, {lit('0'), dark('4'), lit('0'), dark('1')},
+             "the alarm point stays lit while the colon blinks on");
+
+  // And clearing it puts the display back.
+  displaySetAlarmPending(false);
+  hosttest::nowMs = 600;
+  displayTick();
+  checkBytes(hosttest::lastFrame, {dark('0'), dark('4'), dark('0'), dark('1')},
+             "clearing the alarm puts the point out");
+}
+
 static void testClock24h() {
   section("24-hour clock");
 
@@ -746,6 +791,7 @@ int main() {
   testScrolling();
   testClockRendering();
   testClock24h();
+  testAlarmPendingDot();
   testOverrideTextAndReturn();
   testBrightnessZeroBlanks();
   testAlarmFlash();

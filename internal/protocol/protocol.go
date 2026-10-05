@@ -75,7 +75,7 @@ const (
 	// TypeTime synchronises the Nano's local clock. Args: unix seconds, UTC offset
 	// seconds, milliseconds elapsed into the current second.
 	TypeTime Type = "TIME"
-	// TypeAlarm communicates alarm state. Args: ACTIVE, 0|1.
+	// TypeAlarm communicates alarm state. Args: ACTIVE|PENDING, 0|1.
 	TypeAlarm Type = "ALARM"
 	// TypeDisplay controls the 7-segment display. Args: TEXT|BRIGHTNESS|CLOCK, value.
 	TypeDisplay Type = "DISPLAY"

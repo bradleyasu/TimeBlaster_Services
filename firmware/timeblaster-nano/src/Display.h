@@ -49,6 +49,12 @@ void displaySetBrightness(int percent);
 // displaySetAlarmActive starts or stops the ringing-alarm flash.
 void displaySetAlarmActive(bool active);
 
+// displaySetAlarmPending lights the last digit's decimal point while an alarm
+// is due within the next day, so "10.40." means one is set and "10.40" means
+// none is. It is the only indicator the display has room for, and it answers
+// the question actually asked at bedtime.
+void displaySetAlarmPending(bool pending);
+
 // displaySetSynced tells the display whether the Pi has sent a time yet. Until
 // it has, the driver's loading animation runs, which is a much better "waiting
 // for the Raspberry Pi" indicator than four dashes.

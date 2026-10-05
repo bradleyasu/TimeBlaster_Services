@@ -216,6 +216,56 @@ func (a *App) AlarmSnoozed(active alarm.Active) {
 // ScheduleChanged pushes the next-alarm time to connected apps.
 func (a *App) ScheduleChanged(next *alarm.Upcoming) {
 	a.publish(state.NewEvent(state.EventScheduleChanged, next))
+	// The display's alarm point follows the same answer, so update it here as
+	// well as on the timer: editing an alarm should light or clear the point at
+	// once rather than up to half a minute later.
+	a.pushAlarmPending(next)
+}
+
+// alarmPendingWindow is how far ahead an alarm counts as pending.
+//
+// A day, because the question the point answers is "am I going to be woken
+// up?", and the person asking it is standing in front of the clock at night.
+const alarmPendingWindow = 24 * time.Hour
+
+// alarmPendingInterval re-checks the window as time passes. An alarm 25 hours
+// away becomes 24 hours away with nothing having changed, so the event alone is
+// not enough.
+const alarmPendingInterval = 30 * time.Second
+
+// pushAlarmPending lights or clears the display's alarm point.
+//
+// next is passed in where the caller already has it, because the scheduler
+// publishes the new value before Next() would return it.
+func (a *App) pushAlarmPending(next *alarm.Upcoming) {
+	if a.nano == nil {
+		return
+	}
+	var within bool
+	if next != nil {
+		d := next.At.Sub(a.clock.Now())
+		// An alarm due in the past is one the scheduler has not caught up with
+		// yet, and it is certainly within the day.
+		within = d <= alarmPendingWindow
+	}
+	if err := a.nano.SetAlarmPending(within); err != nil {
+		a.log.Debug("could not update the alarm indicator", "error", err)
+	}
+}
+
+// runAlarmIndicator keeps the display's alarm point honest as time passes.
+func (a *App) runAlarmIndicator(ctx context.Context) error {
+	for {
+		a.pushAlarmPending(a.scheduler.Next())
+
+		timer := a.clock.NewTimer(alarmPendingInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C():
+		}
+	}
 }
 
 // --- hardware link -----------------------------------------------------------

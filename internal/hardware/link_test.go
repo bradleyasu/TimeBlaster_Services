@@ -999,3 +999,74 @@ func TestLinkRecordsTheNanosDroppedFrameCount(t *testing.T) {
 		t.Errorf("a PING without the count overwrote it: %d", got)
 	}
 }
+
+// expectMatching reads until a message satisfies want, or fails. expect matches
+// on type alone, which is not enough for ALARM: it carries both ACTIVE and
+// PENDING and the first one seen would be the wrong one.
+func (n *nanoSide) expectMatching(what string, want func(protocol.Message) bool, timeout time.Duration) protocol.Message {
+	n.t.Helper()
+	done := make(chan protocol.Message, 1)
+	go func() {
+		for n.sc.Scan() {
+			m, err := n.sc.Message()
+			if err != nil {
+				continue
+			}
+			if want(m) {
+				done <- m
+				return
+			}
+		}
+	}()
+	select {
+	case m := <-done:
+		return m
+	case <-time.After(timeout):
+		n.t.Fatalf("the Pi never sent %s", what)
+		return protocol.Message{}
+	}
+}
+
+// alarmPendingIs matches an ALARM PENDING carrying a particular value. The
+// value matters because the connection resync sends PENDING 0 of its own, and a
+// matcher that only looked at the sub-type would catch that one instead.
+func alarmPendingIs(on bool) func(protocol.Message) bool {
+	want := "0"
+	if on {
+		want = "1"
+	}
+	return func(m protocol.Message) bool {
+		return m.Type == protocol.TypeAlarm && len(m.Args) >= 2 &&
+			m.Args[0] == "PENDING" && m.Args[1] == want
+	}
+}
+
+func TestAlarmPendingIsRestoredAfterAReconnect(t *testing.T) {
+	// The Nano forgets everything when it reconnects, and it has been
+	// reconnecting rather a lot. Without this the alarm point goes dark after a
+	// reconnect and stays dark, because the cached value here still says it is
+	// already lit and nothing would be sent.
+	cfg := DefaultConfig()
+	cfg.ReconnectMin = time.Millisecond
+	cfg.ReconnectMax = 2 * time.Millisecond
+	f, nanos := newLinkFixture(t, cfg, 2)
+
+	waitUntil(t, "first connection", f.link.Connected)
+	first := newNanoSide(t, nanos[0])
+	first.send(protocol.Ping(1, time.Second))
+
+	if err := f.link.SetAlarmPending(true); err != nil {
+		t.Fatalf("SetAlarmPending: %v", err)
+	}
+	first.expectMatching("ALARM PENDING 1", alarmPendingIs(true), 3*time.Second)
+
+	// Pull the cable and let it come back.
+	nanos[0].Close()
+	waitUntil(t, "disconnect", func() bool { return !f.link.Connected() })
+	waitUntil(t, "backoff timer", func() bool { return f.clock.Waiters() > 0 })
+	f.clock.Advance(time.Second)
+	waitUntil(t, "reconnection", f.link.Connected)
+
+	second := newNanoSide(t, nanos[1])
+	second.expectMatching("ALARM PENDING 1 after the reconnect", alarmPendingIs(true), 3*time.Second)
+}

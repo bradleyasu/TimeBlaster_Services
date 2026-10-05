@@ -145,6 +145,11 @@ static void handleMessage(const Message& msg) {
     return;
   }
 
+  if (msg.type == "ALARM" && msg.argc >= 2 && msg.args[0] == "PENDING") {
+    displaySetAlarmPending(msg.args[1] == "1");
+    return;
+  }
+
   if (msg.type == "DISPLAY" && msg.argc >= 1) {
     if (msg.args[0] == "TEXT" && msg.argc >= 2) {
       displaySetText(msg.args[1].c_str());
