@@ -1,10 +1,15 @@
-// Package wifi handles network configuration, split across a privilege boundary.
+// Package wifi owns the operations that need root, split across a privilege
+// boundary.
 //
 // The main daemon runs unprivileged and speaks only the small RPC defined here
 // over a unix socket. The timeblaster-wifi helper runs as root, owns every nmcli
-// invocation, and serves the captive-portal page while setup mode is active.
-// Nothing in timeblasterd can run an arbitrary command, change a network, or bind
-// a privileged port.
+// invocation, serves the captive-portal page while setup mode is active, and
+// starts and stops Raspberry Pi Connect. Nothing in timeblasterd can run an
+// arbitrary command, change a network, or bind a privileged port.
+//
+// Remote access lives here rather than in a second root service because there
+// being exactly one component running as root is a property worth keeping, and
+// the RPC that guards it already exists.
 //
 // Wi-Fi setup has exactly one entry path: holding the dedicated button for five
 // seconds. The daemon never starts an access point on its own because a network
@@ -39,6 +44,12 @@ const (
 	OpConnect Op = "connect"
 	// OpPing checks that the helper is alive.
 	OpPing Op = "ping"
+	// OpRemoteStatus reports whether Raspberry Pi Connect is running.
+	OpRemoteStatus Op = "remote_status"
+	// OpRemoteOn starts remote access and lets it start at boot.
+	OpRemoteOn Op = "remote_on"
+	// OpRemoteOff stops remote access and stops it starting at boot.
+	OpRemoteOff Op = "remote_off"
 )
 
 // Request is one RPC call.
@@ -58,6 +69,7 @@ type Response struct {
 	Error   string `json:"error,omitempty"`
 
 	Status   *Status        `json:"status,omitempty"`
+	Remote   *RemoteStatus  `json:"remote,omitempty"`
 	Networks []Network      `json:"networks,omitempty"`
 	Connect  *ConnectResult `json:"connect,omitempty"`
 }
@@ -99,6 +111,25 @@ type Status struct {
 	LastError string `json:"last_error,omitempty"`
 }
 
+// RemoteStatus describes Raspberry Pi Connect's state.
+type RemoteStatus struct {
+	// Available reports that Connect is installed and the helper can reach it,
+	// whether or not it is running. The switch is offered on this and nothing
+	// else.
+	Available bool `json:"available"`
+	// Enabled reports whether the service is running.
+	Enabled bool `json:"enabled"`
+	// SignedIn reports whether the device is linked to a Raspberry Pi account.
+	//
+	// Only knowable while the service is running: stopped, Connect prints one
+	// line saying so and nothing about the account. It is kept for diagnosis and
+	// is deliberately not what the switch depends on -- gating on it hid the
+	// control in the one state it exists to get out of.
+	SignedIn bool `json:"signed_in"`
+	// Detail is Connect's own summary.
+	Detail string `json:"detail,omitempty"`
+}
+
 // Network is a visible Wi-Fi network.
 type Network struct {
 	SSID string `json:"ssid"`
@@ -132,7 +163,8 @@ func (r Request) Validate() error {
 		return fmt.Errorf("wifi: unsupported protocol version %d (helper speaks %d)", r.Version, ProtocolVersion)
 	}
 	switch r.Op {
-	case OpStatus, OpEnterSetup, OpExitSetup, OpScan, OpPing:
+	case OpStatus, OpEnterSetup, OpExitSetup, OpScan, OpPing,
+		OpRemoteStatus, OpRemoteOn, OpRemoteOff:
 		return nil
 	case OpConnect:
 		return ValidateCredentials(r.SSID, r.Passphrase)

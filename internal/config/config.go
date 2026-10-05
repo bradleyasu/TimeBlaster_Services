@@ -431,6 +431,16 @@ type WiFi struct {
 	SetupPassphrase string `toml:"setup_passphrase"`
 	// SetupAddress is the Pi's address on the setup network.
 	SetupAddress string `toml:"setup_address"`
+
+	// RemoteCommand is the Raspberry Pi Connect CLI. Empty disables the remote
+	// access switch entirely, which is what an installation without Connect
+	// should look like: absent rather than broken.
+	RemoteCommand string `toml:"remote_command"`
+	// RemoteUser is the account Connect is signed in as. Its units are user
+	// units, so the helper has to become that user to touch them -- running
+	// them as root would reach root's own user manager, where Connect is not
+	// configured and the switch would silently do nothing.
+	RemoteUser string `toml:"remote_user"`
 	// SetupTimeout automatically leaves setup mode after this long, so a forgotten
 	// access point does not stay up indefinitely.
 	SetupTimeout Duration `toml:"setup_timeout"`
@@ -633,6 +643,8 @@ func Default() Config {
 			SetupSSID:       "TIMEBLASTER-SETUP",
 			SetupPassphrase: "",
 			SetupAddress:    "10.42.0.1/24",
+			RemoteCommand:   "rpi-connect",
+			RemoteUser:      "joctv",
 			SetupTimeout:    Dur(15 * time.Minute),
 			ConnectTimeout:  Dur(45 * time.Second),
 			ValidateTimeout: Dur(30 * time.Second),

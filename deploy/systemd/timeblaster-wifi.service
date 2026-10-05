@@ -18,11 +18,17 @@ Requires=NetworkManager.service
 
 [Service]
 Type=simple
-User=root
-# Root for NetworkManager and for binding port 80 on the setup network, but the
-# timeblaster group so that /run/timeblaster and the socket inside it are
-# reachable by the unprivileged daemon. Without this the two units race to
-# create the directory and whichever loses cannot use it.
+# Root for NetworkManager, for binding port 80 on the setup network, and for
+# becoming the Connect user to toggle remote access. Root is the default for a
+# system unit, and it has to stay implicit: writing User=root alongside a
+# non-root Group= makes systemd take a uid-changing path that drops CAP_SETUID,
+# and runuser then fails with "cannot set user id: Operation not permitted"
+# while every capability still shows up in the bounding set. Group=timeblaster
+# alone keeps the capability and still gives the socket the right owner.
+#
+# The timeblaster group is so that /run/timeblaster and the socket inside it are
+# reachable by the unprivileged daemon. Without it the two units race to create
+# the directory and whichever loses cannot use it.
 Group=timeblaster
 ExecStart=/usr/local/bin/timeblaster-wifi --config /etc/timeblaster/timeblaster.toml
 
@@ -45,11 +51,17 @@ StandardError=journal
 SyslogIdentifier=timeblaster-wifi
 
 # --- Hardening --------------------------------------------------------------
-# Root is required for NetworkManager and for binding port 80 on the setup
-# network. Everything not needed for that is removed.
+# Root is required for NetworkManager, for binding port 80 on the setup network,
+# and for becoming the Connect user to start and stop remote access. Everything
+# not needed for that is removed.
 NoNewPrivileges=yes
 ProtectSystem=strict
-ProtectHome=yes
+# read-only rather than yes: Raspberry Pi Connect's units are user units, and
+# reaching the user bus needs the account's home visible. With ProtectHome=yes
+# `rpi-connect status` reports "not running" for a service that is running --
+# a false negative that would have shipped a switch showing the wrong state.
+# read-only is the smallest relaxation that works; tmpfs does not.
+ProtectHome=read-only
 ProtectKernelModules=yes
 ProtectKernelLogs=yes
 ProtectControlGroups=yes
@@ -58,7 +70,9 @@ RestrictSUIDSGID=yes
 RestrictRealtime=yes
 LockPersonality=yes
 
-ReadWritePaths=/run/timeblaster /etc/NetworkManager
+# /run/user is the Connect user's bus directory, which systemctl --user needs
+# to find their manager.
+ReadWritePaths=/run/timeblaster /etc/NetworkManager /run/user
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 SystemCallArchitectures=native
 

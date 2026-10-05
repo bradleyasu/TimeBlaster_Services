@@ -639,6 +639,7 @@
       $('set-display-on').checked = !!s.display_on;
         fillSoundSelect($('set-sound'), s.default_sound_id);
       $('set-tv-audio').value = s.tv_audio_output || 'hdmi';
+    applyRemoteAccess(s);
     }).catch(fail);
   }
 
@@ -650,6 +651,7 @@
     $('set-clock24').checked = !!s.clock_24h;
     $('set-display-on').checked = !!s.display_on;
     $('set-tv-audio').value = s.tv_audio_output || 'hdmi';
+    applyRemoteAccess(s);
     fillSoundSelect($('set-sound'), s.default_sound_id);
   }
 
@@ -672,6 +674,7 @@
       timezone: timezone,
       clock_24h: $('set-clock24').checked,
       tv_audio_output: $('set-tv-audio').value,
+      remote_access_enabled: $('set-remote').checked,
       display_on: $('set-display-on').checked,
       default_sound_id: $('set-sound').value,
       // The overlay has no control any more: it is always on. The field still
@@ -692,6 +695,18 @@
       // Put the controls back to what the device actually has.
       if (savedSettings) applySettings(savedSettings);
     });
+  }
+
+  // applyRemoteAccess shows the switch only where it could work.
+  //
+  // Connect may not be installed, and a device that was never signed in cannot
+  // be reached however many times the switch is flipped. Hiding it in those
+  // cases is more honest than offering a control that silently does nothing.
+  function applyRemoteAccess(s) {
+    var available = !!s.remote_access_available;
+    $('remote-row').hidden = !available;
+    $('remote-hint').hidden = !available;
+    $('set-remote').checked = !!s.remote_access_enabled;
   }
 
   function renderSettings() {
@@ -920,7 +935,7 @@
     // Every control saves itself. Matching the alarm list's switches, which
     // have always worked this way: act on change, say nothing on success, and
     // snap back with an explanation if the device refuses.
-    ['set-clock24', 'set-display-on', 'set-sound', 'set-tv-audio'].forEach(function (id) {
+    ['set-clock24', 'set-display-on', 'set-sound', 'set-tv-audio', 'set-remote'].forEach(function (id) {
       $(id).addEventListener('change', function () { saveSettings(false); });
     });
     // The timezone fires on commit -- blur or Enter -- not on every keystroke.

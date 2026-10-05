@@ -182,6 +182,20 @@ func (s *Server) handle(ctx context.Context, req Request) Response {
 		st := s.Status(ctx)
 		return Response{OK: true, Status: &st}
 
+	case OpRemoteStatus:
+		st, err := s.RemoteStatusNow(ctx)
+		if err != nil {
+			return errorResponse(err)
+		}
+		return Response{OK: true, Remote: &st}
+
+	case OpRemoteOn, OpRemoteOff:
+		st, err := s.SetRemote(ctx, req.Op == OpRemoteOn)
+		if err != nil {
+			return errorResponse(err)
+		}
+		return Response{OK: true, Remote: &st}
+
 	case OpConnect:
 		result, err := s.Connect(ctx, req.SSID, req.Passphrase, req.Hidden)
 		if err != nil {

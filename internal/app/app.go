@@ -538,6 +538,58 @@ func (a *App) registerTasks() {
 	a.sup.add("screen", false, a.runScreen)
 	a.sup.add("clock-broadcast", false, a.runClockBroadcast)
 	a.sup.add("sound-library-refresh", false, a.runLibraryRefresh)
+	a.sup.add("remote-access", false, a.applyRemoteAccessAtStartup)
+}
+
+// applyRemoteAccessAtStartup puts Raspberry Pi Connect back where the stored
+// preference says it should be, which is off unless somebody turned it on.
+//
+// This is what makes the switch mean anything. Connect installs itself as an
+// enabled user service with lingering on, so without this it runs continuously
+// from the moment the Pi boots, whatever the switch in the app says. Running it
+// once at startup rather than continuously is deliberate: the preference is a
+// starting position, not a policy to enforce against someone at a terminal.
+// remoteStartupDelay gives the privileged helper time to start listening
+// before the first remote access call.
+const remoteStartupDelay = 5 * time.Second
+
+func (a *App) applyRemoteAccessAtStartup(ctx context.Context) error {
+	if a.wifi == nil {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	want := storage.GetBool(a.store, storage.KeyRemoteAccessOn, false)
+
+	// The helper starts alongside this daemon and may not be listening yet.
+	// Waiting beats reporting a failure nobody can act on.
+	ready := a.clock.NewTimer(remoteStartupDelay)
+	defer ready.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-ready.C():
+	}
+
+	st, err := a.wifi.RemoteStatus(ctx)
+	if err != nil {
+		// Connect not installed, or the helper is unreachable. Neither is worth
+		// failing the daemon over, and the settings tab reports it as
+		// unavailable rather than pretending.
+		a.log.Debug("remote access state is unavailable at startup", "error", err)
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	if st.Enabled != want {
+		if _, err := a.wifi.SetRemoteAccess(ctx, want); err != nil {
+			a.log.Warn("could not put remote access back where it was left",
+				"wanted", want, "error", err)
+		} else {
+			a.log.Info("remote access restored at startup", "enabled", want)
+		}
+	}
+
+	<-ctx.Done()
+	return ctx.Err()
 }
 
 // Run starts the application and blocks until the context is cancelled.

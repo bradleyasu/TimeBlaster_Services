@@ -23,11 +23,53 @@ type FakeManager struct {
 	ConnectErr error
 	// Unavailable makes Available report false.
 	Unavailable bool
+
+	// remote is the fake's Raspberry Pi Connect state. Signed in and off is the
+	// shipped posture: the device is linked to an account, and the service only
+	// runs when somebody asks for it.
+	remote RemoteStatus
+	// RemoteErr makes only the remote access operations fail, which is how a
+	// device without Connect installed is simulated.
+	RemoteErr error
+}
+
+// RemoteStatus reports the fake's remote access state.
+func (f *FakeManager) RemoteStatus(ctx context.Context) (RemoteStatus, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, "remote_status")
+	if f.RemoteErr != nil {
+		return RemoteStatus{}, f.RemoteErr
+	}
+	if f.Err != nil {
+		return RemoteStatus{}, f.Err
+	}
+	return f.remote, nil
+}
+
+// SetRemoteAccess starts or stops the fake's remote access.
+func (f *FakeManager) SetRemoteAccess(ctx context.Context, on bool) (RemoteStatus, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if on {
+		f.calls = append(f.calls, "remote_on")
+	} else {
+		f.calls = append(f.calls, "remote_off")
+	}
+	if f.RemoteErr != nil {
+		return RemoteStatus{}, f.RemoteErr
+	}
+	if f.Err != nil {
+		return RemoteStatus{}, f.Err
+	}
+	f.remote.Enabled = on
+	return f.remote, nil
 }
 
 // NewFakeManager returns a fake in the normal (connected) state.
 func NewFakeManager() *FakeManager {
 	return &FakeManager{
+		remote: RemoteStatus{SignedIn: true, Enabled: false},
 		status: Status{
 			Mode: ModeNormal, Interface: "wlan0", Connected: true,
 			SSID: "Home", IPv4: "192.168.1.42/24", Hostname: "timeblaster.local",

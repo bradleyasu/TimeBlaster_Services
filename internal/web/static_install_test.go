@@ -304,3 +304,30 @@ func TestRetryIsOfferedAndResetsTheBackoff(t *testing.T) {
 		t.Error("nothing wires the retry button")
 	}
 }
+
+func TestRemoteAccessSwitchIsHiddenWhenItCannotWork(t *testing.T) {
+	// Raspberry Pi Connect may not be installed at all. Offering a switch that
+	// silently does nothing is worse than not offering one, and the daemon
+	// already reports availability separately from state for this reason.
+	html := readStatic(t, "index.html")
+	js := readStatic(t, "app.js")
+
+	row := regexp.MustCompile(`<div[^>]*id="remote-row"[^>]*>`).FindString(html)
+	if row == "" {
+		t.Fatal("index.html has no remote-row")
+	}
+	if !strings.Contains(row, "hidden") {
+		t.Errorf("the remote access row is not hidden in the markup, so it shows before the daemon has said whether it works: %s", row)
+	}
+
+	body := funcBody(t, js, "applyRemoteAccess")
+	if !strings.Contains(body, "remote_access_available") {
+		t.Error("applyRemoteAccess ignores availability, so the switch appears where Connect is not installed")
+	}
+	if !strings.Contains(body, "remote_access_enabled") {
+		t.Error("applyRemoteAccess never reflects the actual state")
+	}
+	if !strings.Contains(js, "remote_access_enabled: $('set-remote').checked") {
+		t.Error("the switch is not sent when settings are saved, so flipping it does nothing")
+	}
+}

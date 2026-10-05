@@ -19,7 +19,7 @@ import (
 // the database is the user's choices, so reinstalling does not discard
 // preferences and editing the config file does not silently override them.
 func (a *App) Settings() web.Settings {
-	return web.Settings{
+	s := web.Settings{
 		Timezone:       storage.GetString(a.store, storage.KeyTimezone, a.cfg.General.Timezone),
 		Clock24h:       storage.GetBool(a.store, storage.KeyClock24h, a.cfg.General.Clock24h),
 		DisplayOn:      a.storedDisplayOn(),
@@ -27,6 +27,37 @@ func (a *App) Settings() web.Settings {
 		OverlayEnabled: storage.GetBool(a.store, storage.KeyChannelOverlayOn, a.cfg.Overlay.Enabled),
 		TVAudioOutput:  a.storedTVAudioOutput(),
 	}
+	s.RemoteAccessEnabled, s.RemoteAccessAvailable = a.remoteAccessState()
+	return s
+}
+
+// remoteStatusTimeout bounds the helper call made while building the settings
+// document. It is on the path of every settings fetch, so a helper that has
+// stopped answering must not hold the app's settings tab open.
+const remoteStatusTimeout = 3 * time.Second
+
+// remoteAccessState asks the helper what Raspberry Pi Connect is doing.
+//
+// The live state is authoritative rather than the stored preference: Connect can
+// be turned on or off from a terminal, and a switch that shows what we last
+// wrote instead of what is true would be worse than no switch. The stored value
+// only decides what happens at startup.
+func (a *App) remoteAccessState() (enabled, available bool) {
+	if a.wifi == nil {
+		return false, false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), remoteStatusTimeout)
+	defer cancel()
+
+	st, err := a.wifi.RemoteStatus(ctx)
+	if err != nil {
+		a.log.Debug("could not read the remote access state", "error", err)
+		return false, false
+	}
+	// Availability, not signed-in: Connect reports nothing about the account
+	// while it is stopped, and stopped is the state this switch exists to get
+	// out of. Gating on SignedIn hid the control exactly when it was needed.
+	return st.Enabled, st.Available
 }
 
 // storedTVAudioOutput reads where the television's sound should go, falling
@@ -191,6 +222,21 @@ func (a *App) UpdateSettings(ctx context.Context, s web.Settings) (web.Settings,
 			a.media.RestorePlayback(ctx)
 		}
 		a.log.Info("television audio output changed", "output", s.TVAudioOutput)
+	}
+
+	if s.RemoteAccessEnabled != current.RemoteAccessEnabled {
+		if a.wifi == nil {
+			return web.Settings{}, fmt.Errorf("app: remote access cannot be changed without the privileged helper")
+		}
+		if _, err := a.wifi.SetRemoteAccess(ctx, s.RemoteAccessEnabled); err != nil {
+			return web.Settings{}, err
+		}
+		// Recorded so startup can restore it. The helper is still the authority
+		// on what is actually running; this only says what we asked for.
+		if err := storage.SetBool(a.store, storage.KeyRemoteAccessOn, s.RemoteAccessEnabled); err != nil {
+			return web.Settings{}, err
+		}
+		a.log.Info("remote access changed", "enabled", s.RemoteAccessEnabled)
 	}
 
 	if s.OverlayEnabled != current.OverlayEnabled {

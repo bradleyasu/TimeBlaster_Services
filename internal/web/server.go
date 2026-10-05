@@ -87,6 +87,12 @@ type Settings struct {
 	OverlayEnabled bool   `json:"channel_overlay_enabled"`
 	// TVAudioOutput is "hdmi" or "speaker".
 	TVAudioOutput string `json:"tv_audio_output"`
+	// RemoteAccessEnabled reports whether Raspberry Pi Connect is running.
+	RemoteAccessEnabled bool `json:"remote_access_enabled"`
+	// RemoteAccessAvailable is false when Connect is not installed or the
+	// device was never signed in, which the app uses to explain why the switch
+	// is not there rather than offering one that cannot work.
+	RemoteAccessAvailable bool `json:"remote_access_available"`
 }
 
 // SettingsService reads and writes preferences. The application wires it to

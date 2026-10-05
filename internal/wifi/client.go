@@ -21,6 +21,10 @@ type Manager interface {
 	ExitSetupMode(ctx context.Context) error
 	Scan(ctx context.Context) ([]Network, error)
 	Connect(ctx context.Context, ssid, passphrase string, hidden bool) (ConnectResult, error)
+	// RemoteStatus reports whether Raspberry Pi Connect is running.
+	RemoteStatus(ctx context.Context) (RemoteStatus, error)
+	// SetRemoteAccess starts or stops it.
+	SetRemoteAccess(ctx context.Context, on bool) (RemoteStatus, error)
 	// Available reports whether the helper is reachable.
 	Available() bool
 }
@@ -112,6 +116,34 @@ func (c *Client) Connect(ctx context.Context, ssid, passphrase string, hidden bo
 		return ConnectResult{}, errors.New("wifi: the helper returned no connection result")
 	}
 	return *resp.Connect, nil
+}
+
+// RemoteStatus reports whether Raspberry Pi Connect is running.
+func (c *Client) RemoteStatus(ctx context.Context) (RemoteStatus, error) {
+	resp, err := c.call(ctx, Request{Op: OpRemoteStatus})
+	if err != nil {
+		return RemoteStatus{}, err
+	}
+	if resp.Remote == nil {
+		return RemoteStatus{}, fmt.Errorf("wifi: the helper reported no remote access state")
+	}
+	return *resp.Remote, nil
+}
+
+// SetRemoteAccess starts or stops Raspberry Pi Connect.
+func (c *Client) SetRemoteAccess(ctx context.Context, on bool) (RemoteStatus, error) {
+	op := OpRemoteOff
+	if on {
+		op = OpRemoteOn
+	}
+	resp, err := c.call(ctx, Request{Op: op})
+	if err != nil {
+		return RemoteStatus{}, err
+	}
+	if resp.Remote == nil {
+		return RemoteStatus{}, fmt.Errorf("wifi: the helper reported no remote access state")
+	}
+	return *resp.Remote, nil
 }
 
 // Ping checks that the helper is alive.
