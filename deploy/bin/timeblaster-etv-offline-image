@@ -1,0 +1,49 @@
+#!/bin/bash
+# Put the Timeblaster's own image behind ErsatzTV's "Channel is Offline" screen.
+#
+# ErsatzTV keeps that background at
+#
+#   <state>/cache/resources/_background.png
+#
+# and re-extracts its own copy from the binary every time it starts, about a
+# second before the HTTP port opens. Replacing the file once therefore lasts
+# until the next restart and no longer. This runs as ExecStartPost, waits for
+# ErsatzTV to be serving -- which is strictly after the extraction -- and then
+# puts ours back.
+#
+# Deliberately never fatal. A missing image or an unreachable ErsatzTV is a
+# cosmetic problem, and failing here would take the television down with it.
+set -u
+
+SRC="${1:-/var/lib/timeblaster/assets/ersatztv-offline.png}"
+DST="${2:-/var/lib/ersatztv/.local/share/ersatztv/cache/resources/_background.png}"
+URL="${3:-http://127.0.0.1:8409/iptv/channels.m3u}"
+
+log() { printf 'timeblaster-etv-offline-image: %s\n' "$*"; }
+
+if [[ ! -f "$SRC" ]]; then
+  log "no image at ${SRC}; leaving ErsatzTV's own in place"
+  exit 0
+fi
+
+for _ in $(seq 1 60); do
+  curl -sf -o /dev/null --max-time 2 "$URL" && break
+  sleep 1
+done
+
+if [[ ! -d "$(dirname "$DST")" ]]; then
+  log "ErsatzTV has not created $(dirname "$DST") yet; nothing to replace"
+  exit 0
+fi
+
+if cmp -s "$SRC" "$DST"; then
+  log "already current"
+  exit 0
+fi
+
+if install -m 0644 -o ersatztv -g ersatztv "$SRC" "$DST"; then
+  log "installed ${SRC} over ${DST}"
+else
+  log "could not replace ${DST}; ErsatzTV's own image stays"
+fi
+exit 0

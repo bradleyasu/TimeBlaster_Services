@@ -1,5 +1,8 @@
-# Build output
-bin/
+# Build output. Anchored: an unanchored bin/ also matched deploy/bin/, which
+# silently kept timeblaster-etv-offline-image out of the repository. The deployed
+# Pi only had it because it was copied over by hand, and the first install from a
+# clean checkout failed on it.
+/bin/
 *.exe
 /timeblasterd
 /timeblaster-wifi
