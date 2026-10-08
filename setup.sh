@@ -550,14 +550,23 @@ configure_journald() {
 
   if [[ -f "$dst" ]] && cmp -s "$src" "$dst"; then
     skip "journald limits are already current"
-    return
+  else
+    run install -d -m 0755 -o root -g root /etc/systemd/journald.conf.d
+    run install -m 0644 -o root -g root "$src" "$dst"
+    # The directory journald writes into when storage is persistent.
+    run install -d -m 2755 -o root -g systemd-journal /var/log/journal
+    run systemctl restart systemd-journald
+    ok "installed ${dst} (persistent, capped at 200M, keeping 1G free)"
   fi
-  run install -d -m 0755 -o root -g root /etc/systemd/journald.conf.d
-  run install -m 0644 -o root -g root "$src" "$dst"
-  # The directory journald writes into when storage is persistent.
-  run install -d -m 2755 -o root -g systemd-journal /var/log/journal
-  run systemctl restart systemd-journald
-  ok "installed ${dst} (persistent, capped at 200M, keeping 1G free)"
+
+  # Unconditional, and after the skip above rather than inside it. A restarted
+  # journald keeps writing to the runtime journal in RAM until something tells
+  # it to move to /var/log/journal; at boot systemd-journal-flush does that, but
+  # mid-install nothing does. Without this the first install left logging
+  # volatile until the next reboot -- and a re-run then found the drop-in
+  # "already current", skipped the step, and never flushed at all. Flushing is
+  # idempotent, so doing it every time costs nothing.
+  run journalctl --flush
 }
 
 configure_hostname() {
