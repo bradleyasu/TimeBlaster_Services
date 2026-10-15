@@ -196,6 +196,12 @@ func (s *Server) handle(ctx context.Context, req Request) Response {
 		}
 		return Response{OK: true, Remote: &st}
 
+	case OpPowerOff:
+		if err := s.PowerOff(ctx); err != nil {
+			return errorResponse(err)
+		}
+		return Response{OK: true}
+
 	case OpConnect:
 		result, err := s.Connect(ctx, req.SSID, req.Passphrase, req.Hidden)
 		if err != nil {

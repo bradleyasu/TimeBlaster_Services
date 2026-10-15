@@ -7,7 +7,7 @@
 CXX      ?= c++
 CXXFLAGS := -std=c++17 -Wall -O1 -I test/host -I src
 
-TEST_SRCS := src/SevenSegment.cpp src/Display.cpp src/Inputs.cpp src/Protocol.cpp \
+TEST_SRCS := src/SevenSegment.cpp src/Display.cpp src/Inputs.cpp src/Protocol.cpp src/Shutdown.cpp \
              test/host/Arduino.cpp test/host/test_firmware.cpp
 
 FIXTURE := ../../internal/protocol/testdata/firmware-frames.bin

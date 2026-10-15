@@ -7,10 +7,14 @@
 
 // How the display decides what to show, in priority order:
 //
+//   0. shutting down         -> the countdown, or the loading animation
 //   1. brightness 0          -> blank
 //   2. not yet time-synced   -> the driver's loading animation
 //   3. an override text set  -> that text (scrolling if it is too long)
 //   4. otherwise             -> the clock, colon blinking on the half second
+//
+// Shutdown sits above "off" on purpose. Someone holding the button that powers
+// the Timeblaster down has to see the countdown, whatever the display was set to.
 //
 // An active alarm flashes whatever 3 or 4 produced, so the display pulses in
 // time with the alarm LED.
@@ -31,6 +35,12 @@ static bool clock24h = false;
 
 static bool alarmActive   = false;
 static bool alarmPending  = false;
+
+// The shutdown layer. Owned by Shutdown.cpp; held here because it decides what
+// the display shows.
+enum ShutdownDisplay { SHUTDOWN_NONE, SHUTDOWN_TEXT, SHUTDOWN_ANIMATE };
+static ShutdownDisplay shutdownMode = SHUTDOWN_NONE;
+static char shutdownText[8] = {0};
 static bool timeSynced    = false;
 static int  brightnessPct = 75;
 
@@ -57,6 +67,8 @@ void displayInit() {
   clockHasTime = false;
   clockMinute = 0;
   alarmActive = false;
+  shutdownMode = SHUTDOWN_NONE;
+  shutdownText[0] = '\0';
   timeSynced = false;
   brightnessPct = 75;
   lastPushed[0] = '\0';
@@ -137,6 +149,29 @@ void displaySetBrightness(int percent) {
 
 void displaySetAlarmPending(bool pending) { alarmPending = pending; }
 
+bool displayAlarmIsActive() { return alarmActive; }
+
+void displayShutdownText(const char* text) {
+  shutdownMode = SHUTDOWN_TEXT;
+  strncpy(shutdownText, text, sizeof(shutdownText) - 1);
+  shutdownText[sizeof(shutdownText) - 1] = '\0';
+}
+
+void displayShutdownAnimate() { shutdownMode = SHUTDOWN_ANIMATE; }
+
+void displayShutdownClear() {
+  if (shutdownMode == SHUTDOWN_NONE) {
+    return;
+  }
+  shutdownMode = SHUTDOWN_NONE;
+  // Stop any animation and forget what was last pushed, so the next tick
+  // repaints the clock rather than deciding nothing has changed.
+  setLoading(false);
+  lastPushed[0] = '\0';
+}
+
+bool displayShutdownActive() { return shutdownMode != SHUTDOWN_NONE; }
+
 void displaySetAlarmActive(bool active) {
   alarmActive = active;
   if (!active) {
@@ -192,6 +227,18 @@ static void buildClockText(char* out, size_t n, bool colonOn) {
 
 void displayTick() {
   unsigned long now = millis();
+
+  if (shutdownMode == SHUTDOWN_ANIMATE) {
+    setLoading(true);
+    paintDisplay();
+    return;
+  }
+  if (shutdownMode == SHUTDOWN_TEXT) {
+    setLoading(false);
+    push(shutdownText);
+    paintDisplay();
+    return;
+  }
 
   // The display being off wins over everything else, including the alarm flash
   // and the waiting animation. Off means off.

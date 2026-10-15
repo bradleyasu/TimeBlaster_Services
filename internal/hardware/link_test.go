@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1069,4 +1070,64 @@ func TestAlarmPendingIsRestoredAfterAReconnect(t *testing.T) {
 
 	second := newNanoSide(t, nanos[1])
 	second.expectMatching("ALARM PENDING 1 after the reconnect", alarmPendingIs(true), 3*time.Second)
+}
+
+type recordingShutdown struct{ calls atomic.Int32 }
+
+func (r *recordingShutdown) ShutdownRequested() { r.calls.Add(1) }
+
+func isShutdownAnswer(answer string) func(protocol.Message) bool {
+	return func(m protocol.Message) bool {
+		return m.Type == protocol.TypeShutdown && m.Arg(0) == answer
+	}
+}
+
+func TestShutdownRequestReachesTheHook(t *testing.T) {
+	f, nanos := newLinkFixture(t, DefaultConfig(), 1)
+	hook := &recordingShutdown{}
+	f.link.SetShutdown(hook)
+	nano := newNanoSide(t, nanos[0])
+	waitUntil(t, "connection", f.link.Connected)
+
+	nano.send(protocol.Message{Seq: 1, Type: protocol.TypeShutdown, Args: []string{protocol.ShutdownRequest}})
+	waitUntil(t, "the hook", func() bool { return hook.calls.Load() == 1 })
+
+	// Only REQUEST means anything coming from the Nano. Anything else -- a stray
+	// or corrupted argument -- must not be read as a request to power off.
+	nano.send(protocol.Message{Seq: 2, Type: protocol.TypeShutdown, Args: []string{"ACCEPTED"}})
+	nano.send(protocol.Message{Seq: 3, Type: protocol.TypeShutdown})
+	waitUntil(t, "the later messages", func() bool { return f.link.Status().MessagesRx >= 3 })
+	if n := hook.calls.Load(); n != 1 {
+		t.Errorf("a non-REQUEST shutdown message reached the hook (%d calls)", n)
+	}
+}
+
+func TestShutdownIsRefusedWithNoHook(t *testing.T) {
+	// A link wired without a decision-maker must say no, so the Nano returns to
+	// normal rather than holding the animation waiting.
+	f, nanos := newLinkFixture(t, DefaultConfig(), 1)
+	nano := newNanoSide(t, nanos[0])
+	waitUntil(t, "connection", f.link.Connected)
+
+	nano.send(protocol.Message{Seq: 1, Type: protocol.TypeShutdown, Args: []string{protocol.ShutdownRequest}})
+	nano.expectMatching("SHUTDOWN REFUSED", isShutdownAnswer(protocol.ShutdownRefused), 3*time.Second)
+}
+
+func TestAnswerShutdownReachesTheNano(t *testing.T) {
+	f, nanos := newLinkFixture(t, DefaultConfig(), 1)
+	nano := newNanoSide(t, nanos[0])
+	waitUntil(t, "connection", f.link.Connected)
+
+	if err := f.link.AnswerShutdown(true, ""); err != nil {
+		t.Fatalf("AnswerShutdown: %v", err)
+	}
+	nano.expectMatching("SHUTDOWN ACCEPTED", isShutdownAnswer(protocol.ShutdownAccepted), 3*time.Second)
+
+	if err := f.link.AnswerShutdown(false, "alarm ringing"); err != nil {
+		t.Fatalf("AnswerShutdown: %v", err)
+	}
+	m := nano.expectMatching("SHUTDOWN REFUSED", isShutdownAnswer(protocol.ShutdownRefused), 3*time.Second)
+	if m.Arg(1) != "alarm ringing" {
+		t.Errorf("the refusal lost its reason: %q", m.Arg(1))
+	}
 }

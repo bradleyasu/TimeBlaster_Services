@@ -99,11 +99,43 @@ when pressed. No external resistor is needed.
 | Button | Pin | Function |
 | --- | --- | --- |
 | Wi-Fi setup | `D2` | **Hold five seconds** to enter Wi-Fi setup mode. A short press does nothing. |
-| Alarm Off (big red) | `D3` | **Press** to dismiss a ringing alarm. Does nothing when no alarm is ringing. |
+| Alarm Off (big red) | `D3` | **Press** to dismiss a ringing alarm. **Hold ten seconds** to shut the Timeblaster down. |
 
-The firmware debounces for 25 ms and reports edges only. The five-second hold is
-measured on the Pi, where its duration is configurable
+The firmware debounces for 25 ms and reports edges. The Wi-Fi button's
+five-second hold is measured on the Pi, where its duration is configurable
 (`input.wifi_hold_duration`) and its behaviour is unit-tested.
+
+### Shutting down with the big red button
+
+Hold the red button for ten seconds. Nothing shows for the first two, so an
+ordinary press never puts a digit on the display; then it counts `8`, `7`, … `0`
+and switches to the loading animation while the Pi shuts down. Letting go at any
+point before `0` cancels and the display carries on as normal.
+
+Once shutdown is complete the display goes dark, which is the signal that it is
+safe to unplug. That depends on the bootloader setting `POWER_OFF_ON_HALT=1`,
+which `setup.sh` applies; without it the board keeps USB powered after halting
+and the display shows `OFF` instead. To start it again, unplug and replug it.
+
+Unlike the Wi-Fi hold, this one is timed **on the Nano**, deliberately. The Pi
+only sees press and release messages, and if a release were lost it would
+believe the button was still down -- an ordinary press would then power the
+device off ten seconds later. On the Nano the button, the timer and the display
+are all local: letting go cancels instantly, and nothing is sent until the
+countdown has run out. The single `SHUTDOWN` request is all the Pi acts on, so a
+lost frame can fail to shut down but can never cause one.
+
+It will not shut down:
+
+* **from a press made while an alarm is ringing**, however long it is held --
+  someone leaning on the button to silence an alarm must not turn the alarm
+  clock off. An alarm starting during a countdown cancels it.
+* **from a button held since power-on.** It must be seen released once first, or
+  a stuck button would shut the Timeblaster down ten seconds after every boot.
+* **if the Pi says no.** The Pi re-checks for a ringing alarm and can refuse;
+  the display then returns to normal. If no answer arrives within five seconds
+  the display returns to normal too, rather than showing a shutdown that is not
+  happening.
 
 ### LEDs
 

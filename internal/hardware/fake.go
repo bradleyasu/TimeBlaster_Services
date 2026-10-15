@@ -45,6 +45,11 @@ func (f *FakeNano) SetAlarmActive(active bool) error {
 	return f.record(Command{Kind: "alarm", Flag: active})
 }
 
+// AnswerShutdown records a reply to a shutdown request.
+func (f *FakeNano) AnswerShutdown(accepted bool, reason string) error {
+	return f.record(Command{Kind: "shutdown-answer", Flag: accepted, Text: reason})
+}
+
 // SetAlarmPending records an alarm-within-the-day state change.
 func (f *FakeNano) SetAlarmPending(pending bool) error {
 	return f.record(Command{Kind: "alarm-pending", Flag: pending})

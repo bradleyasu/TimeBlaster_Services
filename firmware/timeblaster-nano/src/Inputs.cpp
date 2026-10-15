@@ -1,4 +1,6 @@
 #include "Inputs.h"
+
+#include <string.h>
 #include "Pins.h"
 #include "Protocol.h"
 
@@ -118,6 +120,15 @@ static void potsPoll() {
       potLastSentAt[i] = now;
     }
   }
+}
+
+bool inputsButtonDown(const char* name) {
+  for (uint8_t i = 0; i < BUTTON_COUNT; i++) {
+    if (strcmp(buttons[i].name, name) == 0) {
+      return buttons[i].stable;
+    }
+  }
+  return false;
 }
 
 // buttonsPoll debounces and reports edges only. The five-second hold that

@@ -50,6 +50,9 @@ const (
 	OpRemoteOn Op = "remote_on"
 	// OpRemoteOff stops remote access and stops it starting at boot.
 	OpRemoteOff Op = "remote_off"
+	// OpPowerOff shuts the system down. It takes no arguments: there is nothing
+	// in the request a caller could use to make it do anything else.
+	OpPowerOff Op = "power_off"
 )
 
 // Request is one RPC call.
@@ -164,7 +167,7 @@ func (r Request) Validate() error {
 	}
 	switch r.Op {
 	case OpStatus, OpEnterSetup, OpExitSetup, OpScan, OpPing,
-		OpRemoteStatus, OpRemoteOn, OpRemoteOff:
+		OpRemoteStatus, OpRemoteOn, OpRemoteOff, OpPowerOff:
 		return nil
 	case OpConnect:
 		return ValidateCredentials(r.SSID, r.Passphrase)

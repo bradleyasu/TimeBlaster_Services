@@ -20,6 +20,14 @@ void inputsInit();
 // they change. Call it every pass of loop().
 void inputsPoll();
 
+// inputsButtonDown reports a button's debounced state by its protocol name.
+//
+// Read-only, and deliberately outside the edge reporting below: the shutdown
+// countdown needs to know the big red button is still held, but nothing about
+// how edges reach the Pi -- which is what the Wi-Fi button's hold depends on --
+// changes because of it.
+bool inputsButtonDown(const char* name);
+
 // inputsSetPotThreshold changes how much a filtered reading must move before it
 // is reported, in raw ADC counts. Driven by the Pi's CONFIG message.
 void inputsSetPotThreshold(uint16_t counts);

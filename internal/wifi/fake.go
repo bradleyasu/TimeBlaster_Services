@@ -31,6 +31,8 @@ type FakeManager struct {
 	// RemoteErr makes only the remote access operations fail, which is how a
 	// device without Connect installed is simulated.
 	RemoteErr error
+	// PowerOffErr makes only PowerOff fail.
+	PowerOffErr error
 }
 
 // RemoteStatus reports the fake's remote access state.
@@ -64,6 +66,17 @@ func (f *FakeManager) SetRemoteAccess(ctx context.Context, on bool) (RemoteStatu
 	}
 	f.remote.Enabled = on
 	return f.remote, nil
+}
+
+// PowerOff records the request. It never actually powers anything off.
+func (f *FakeManager) PowerOff(ctx context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, "power_off")
+	if f.PowerOffErr != nil {
+		return f.PowerOffErr
+	}
+	return f.Err
 }
 
 // NewFakeManager returns a fake in the normal (connected) state.

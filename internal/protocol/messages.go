@@ -43,6 +43,15 @@ func AlarmActive(seq int, active bool) Message {
 	return Message{Seq: seq, Type: TypeAlarm, Args: []string{"ACTIVE", boolArg(active)}}
 }
 
+// ShutdownAnswer replies to the Nano's shutdown request. A refusal carries a
+// reason for the log on the Nano's side of the link.
+func ShutdownAnswer(seq int, accepted bool, reason string) Message {
+	if accepted {
+		return Message{Seq: seq, Type: TypeShutdown, Args: []string{ShutdownAccepted}}
+	}
+	return Message{Seq: seq, Type: TypeShutdown, Args: []string{ShutdownRefused, reason}}
+}
+
 // AlarmPending tells the Nano whether an alarm is due within the next day,
 // which lights the last digit's decimal point.
 //

@@ -87,6 +87,13 @@ const (
 
 // Messages used in both directions.
 const (
+	// TypeShutdown carries the big red button's shutdown request and its answer.
+	// Nano to Pi: REQUEST, once the hold countdown has run out. Pi to Nano:
+	// ACCEPTED, or REFUSED and a reason.
+	//
+	// The Nano times the hold and sends only this one message, so a lost frame can
+	// fail to shut the Timeblaster down but can never cause it to.
+	TypeShutdown Type = "SHUTDOWN"
 	// TypeAck positively acknowledges a sequence number. Args: acked sequence.
 	TypeAck Type = "ACK"
 	// TypeNak rejects a sequence number. Args: rejected sequence, reason.
@@ -105,6 +112,13 @@ const (
 const (
 	ButtonWiFi     = "WIFI"
 	ButtonAlarmOff = "ALARM_OFF"
+)
+
+// Shutdown subcommands carried as the first argument of TypeShutdown.
+const (
+	ShutdownRequest  = "REQUEST"
+	ShutdownAccepted = "ACCEPTED"
+	ShutdownRefused  = "REFUSED"
 )
 
 // Button edge values.

@@ -168,6 +168,7 @@ told.
 | Alarm audio and volume mapping | ADC oversampling and smoothing |
 | Which channel a knob position means | Button debouncing |
 | The five-second hold that enters Wi-Fi setup | Clocking frames into the display's 74HC595 chain |
+| Whether to accept a shutdown request | Timing the big red button's ten-second shutdown hold |
 | Configuration, persistence, the web app | Free-running the clock between syncs |
 
 The display driver (`SevenSegment.{h,cpp}`) is vendored **byte for byte** from
@@ -177,6 +178,11 @@ the working TimeblasterClock project and must not be edited in place; see
 The Nano deliberately does **not** know that pot 0 selects channels, that a
 five-second hold means anything, or when an alarm should ring. Keeping that on the
 Pi means it is configurable, testable, and changeable without a soldering iron.
+
+The one exception is shutting down. Timing that hold on the Pi would mean a lost
+release message could turn an ordinary press into a power-off, so the Nano times
+it and sends a single request at the end; the Pi still decides whether to act on
+it. See [hardware.md](docs/hardware.md#shutting-down-with-the-big-red-button).
 
 ## Status
 

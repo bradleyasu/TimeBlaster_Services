@@ -569,6 +569,42 @@ configure_journald() {
   run journalctl --flush
 }
 
+configure_bootloader() {
+  step "Making the board cut power once it has shut down"
+
+  # With POWER_OFF_ON_HALT=0, the default, a Pi 5 keeps USB powered after it
+  # halts, so the Nano keeps running and goes back to showing the time -- which
+  # looks exactly like a Timeblaster that never shut down. Set to 1, power to the
+  # USB ports is cut once the halt is complete, so the display going dark is the
+  # signal that it is safe to unplug, and it comes from the hardware being off
+  # rather than from software guessing when shutdown has finished.
+  if ! command -v rpi-eeprom-config >/dev/null 2>&1; then
+    warn "rpi-eeprom-config is not installed; leaving the bootloader as it is"
+    warn "  after a shutdown from the big red button the display will show OFF"
+    warn "  rather than going dark"
+    return
+  fi
+
+  local current
+  if ! current="$(rpi-eeprom-config 2>/dev/null)"; then
+    warn "could not read the bootloader configuration; leaving it as it is"
+    return
+  fi
+  if grep -qE '^POWER_OFF_ON_HALT=1$' <<<"$current"; then
+    skip "POWER_OFF_ON_HALT is already set"
+    return
+  fi
+
+  local tmp
+  tmp="$(mktemp)"
+  grep -vE '^POWER_OFF_ON_HALT=' <<<"$current" >"$tmp"
+  printf 'POWER_OFF_ON_HALT=1\n' >>"$tmp"
+  run rpi-eeprom-config --apply "$tmp"
+  rm -f "$tmp"
+  ok "POWER_OFF_ON_HALT=1 written; it takes effect at the next reboot"
+  note "To undo: sudo rpi-eeprom-config --edit and remove POWER_OFF_ON_HALT=1."
+}
+
 configure_hostname() {
   step "Configuring the hostname and mDNS"
 
@@ -1329,6 +1365,7 @@ main() {
   install_udev
   install_modules_load
   configure_journald
+  configure_bootloader
   install_etv_offline_image
   configure_hostname
   configure_console

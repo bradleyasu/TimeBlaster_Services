@@ -49,6 +49,23 @@ void displaySetBrightness(int percent);
 // displaySetAlarmActive starts or stops the ringing-alarm flash.
 void displaySetAlarmActive(bool active);
 
+// displayAlarmIsActive reports whether an alarm is ringing, as last told by the
+// Pi. The shutdown countdown needs it: a press made to silence an alarm must
+// never become a shutdown.
+bool displayAlarmIsActive();
+
+// The shutdown layer outranks everything else the display can show, including
+// "display off": someone holding the button that powers the Timeblaster down has
+// to be able to see what it is about to do.
+//
+//   displayShutdownText("   8")  -> show that text
+//   displayShutdownAnimate()      -> the loading animation, while it shuts down
+//   displayShutdownClear()        -> back to whatever the display would show
+void displayShutdownText(const char* text);
+void displayShutdownAnimate();
+void displayShutdownClear();
+bool displayShutdownActive();
+
 // displaySetAlarmPending lights the last digit's decimal point while an alarm
 // is due within the next day, so "10.40." means one is set and "10.40" means
 // none is. It is the only indicator the display has room for, and it answers

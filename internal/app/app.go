@@ -429,7 +429,7 @@ func (a *App) initHardware(deps Deps) {
 	}
 	a.link = hardware.NewLink(linkCfg, hardware.Deps{
 		Opener: opener, Clock: a.clock, Logger: a.log.With("component", "nano"),
-		Observer: a.router, Lifecycle: a, ClockSync: clockSync,
+		Observer: a.router, Lifecycle: a, Shutdown: a, ClockSync: clockSync,
 	})
 	a.nano = a.link
 }

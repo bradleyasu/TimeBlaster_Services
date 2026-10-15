@@ -36,6 +36,7 @@
 #include "Inputs.h"
 #include "Pins.h"
 #include "Protocol.h"
+#include "Shutdown.h"
 
 #define FIRMWARE_VERSION "1.0.0"
 #define HARDWARE_ID      "nano-esp32"
@@ -145,6 +146,12 @@ static void handleMessage(const Message& msg) {
     return;
   }
 
+  // The Pi's answer to a shutdown request from the big red button.
+  if (msg.type == "SHUTDOWN" && msg.argc >= 1) {
+    shutdownAnswer(msg.args[0] == "ACCEPTED", millis());
+    return;
+  }
+
   if (msg.type == "ALARM" && msg.argc >= 2 && msg.args[0] == "PENDING") {
     displaySetAlarmPending(msg.args[1] == "1");
     return;
@@ -193,6 +200,7 @@ void setup() {
 
   displayInit();
   inputsInit();
+  shutdownInit();
 
   // Give USB CDC a moment to enumerate, keeping the loading animation running
   // so the display is alive from the instant power is applied. The Pi answers
@@ -210,6 +218,10 @@ void loop() {
   inputsPoll();
 
   uint32_t now = millis();
+
+  // Before the display ticks, so a countdown digit and the press that produced
+  // it land in the same pass.
+  shutdownPoll(now, lastPiContact);
 
   // Liveness beacon.
   static uint32_t lastPing = 0;

@@ -32,6 +32,8 @@ type Nano interface {
 	SetAlarmActive(active bool) error
 	// SetAlarmPending tells the Nano whether an alarm is due within the day.
 	SetAlarmPending(pending bool) error
+	// AnswerShutdown replies to the Nano's shutdown request.
+	AnswerShutdown(accepted bool, reason string) error
 	// ShowText displays literal text instead of the clock.
 	ShowText(text string) error
 	// ShowClock returns the display to normal.
@@ -52,6 +54,14 @@ type Observer interface {
 	PotReport(index, raw int)
 	// ButtonEdge delivers a debounced button edge.
 	ButtonEdge(name string, down bool)
+}
+
+// ShutdownHook receives the Nano's request to shut the Timeblaster down.
+//
+// Separate from LifecycleHook so that adding it changed none of that interface's
+// implementers. The hook decides; the link only carries the message.
+type ShutdownHook interface {
+	ShutdownRequested()
 }
 
 // LifecycleHook is called when the link comes up or goes down, so the
@@ -132,6 +142,7 @@ type Link struct {
 
 	observer  Observer
 	lifecycle LifecycleHook
+	shutdown  ShutdownHook
 	clockSync system.ClockSync
 
 	// outbound carries queued messages to the writer. It is buffered; when full,
@@ -173,6 +184,10 @@ type Deps struct {
 	Logger    *slog.Logger
 	Observer  Observer
 	Lifecycle LifecycleHook
+	// Shutdown receives the big red button's shutdown request. Nil refuses
+	// every request, so a Timeblaster wired without it can never power off from
+	// the button by accident.
+	Shutdown ShutdownHook
 	// ClockSync reports whether the system clock is trustworthy yet. Nil trusts
 	// it unconditionally.
 	ClockSync system.ClockSync
@@ -196,6 +211,7 @@ func NewLink(cfg Config, d Deps) *Link {
 		log:       d.Logger,
 		observer:  d.Observer,
 		lifecycle: d.Lifecycle,
+		shutdown:  d.Shutdown,
 		clockSync: d.ClockSync,
 		clock24h:  cfg.Clock24h,
 		outbound:  make(chan protocol.Message, cfg.WriteQueueSize),
@@ -206,6 +222,13 @@ func NewLink(cfg Config, d Deps) *Link {
 func (l *Link) SetObserver(o Observer) {
 	l.mu.Lock()
 	l.observer = o
+	l.mu.Unlock()
+}
+
+// SetShutdown installs the shutdown hook after construction.
+func (l *Link) SetShutdown(h ShutdownHook) {
+	l.mu.Lock()
+	l.shutdown = h
 	l.mu.Unlock()
 }
 
@@ -576,6 +599,22 @@ func (l *Link) dispatch(msg protocol.Message) {
 	case protocol.TypeNak:
 		l.log.Warn("the Nano rejected a command", "seq", msg.Arg(0), "reason", msg.Arg(1))
 
+	case protocol.TypeShutdown:
+		if msg.Arg(0) != protocol.ShutdownRequest {
+			l.log.Debug("ignoring an unexpected shutdown message from the Nano", "args", msg.Args)
+			return
+		}
+		l.mu.RLock()
+		hook := l.shutdown
+		l.mu.RUnlock()
+		if hook == nil {
+			// No one to decide, so the answer is no. The Nano returns to normal.
+			l.log.Warn("shutdown requested from the button, but nothing handles it; refusing")
+			_ = l.AnswerShutdown(false, "not supported")
+			return
+		}
+		hook.ShutdownRequested()
+
 	default:
 		l.log.Debug("ignoring an unknown message type from the Nano", "type", msg.Type)
 	}
@@ -709,6 +748,15 @@ func (l *Link) Resync() {
 // SetTime synchronises the Nano's clock.
 func (l *Link) SetTime(t time.Time) error {
 	return l.enqueue(protocol.Time(l.seq.Next(), t), true)
+}
+
+// AnswerShutdown replies to the Nano's shutdown request.
+//
+// Critical: the Nano is holding the loading animation until it hears back, and
+// gives up after a few seconds. A queue too full to carry the answer would turn
+// an accepted shutdown into one the display says was abandoned.
+func (l *Link) AnswerShutdown(accepted bool, reason string) error {
+	return l.enqueue(protocol.ShutdownAnswer(l.seq.Next(), accepted, reason), true)
 }
 
 // SetAlarmPending tells the Nano whether an alarm is due within the day.

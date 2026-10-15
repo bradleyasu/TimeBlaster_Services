@@ -61,10 +61,11 @@ contain anything:
 | Type | Args | Meaning |
 | --- | --- | --- |
 | `HELLO` | firmware version, hardware id | Sent on boot or reset. The Pi answers with a full resync. |
-| `PING` | uptime ms | Liveness beacon, every 2 s. |
+| `PING` | uptime ms [, dropped frames] | Liveness beacon, every 2 s. Newer firmware adds how many frames it has had to discard because its USB transmit buffer was full; the Pi reports growth in that count, not its starting value. |
 | `POT` | index, raw value | A filtered potentiometer reading, `0`–`4095`. |
 | `BUTTON` | name, `DOWN`\|`UP` | A debounced button edge. Names: `WIFI`, `ALARM_OFF`. |
 | `LOG` | level, text | A firmware diagnostic; surfaced at debug level on the Pi. |
+| `SHUTDOWN` | `REQUEST` | Sent once, when the big red button's ten-second countdown has run out. The Nano times the hold itself; see [hardware.md](hardware.md#shutting-down-with-the-big-red-button). |
 | `ACK` / `NAK` | seq [, reason] | Acknowledgement of a Pi command. |
 
 ```text
@@ -82,6 +83,8 @@ TB1|16|BUTTON|ALARM_OFF|DOWN
 | `PONG` | — | Answers `PING`. |
 | `TIME` | unix seconds, UTC offset seconds, ms into the second | Clock sync. |
 | `ALARM` | `ACTIVE`, `0`\|`1` | Whether an alarm is ringing. |
+| `ALARM` | `PENDING`, `0`\|`1` | Whether an alarm is due within the next day; lights the last digit's decimal point. Older firmware ignores it. |
+| `SHUTDOWN` | `ACCEPTED` \| `REFUSED`, reason | The answer to a shutdown request. A refusal, or no answer within five seconds, returns the display to normal. |
 | `DISPLAY` | `TEXT`, text | Show literal text instead of the clock. |
 | `DISPLAY` | `CLOCK` | Return to the clock. |
 | `DISPLAY` | `BRIGHTNESS`, 0–100 | Whether the display is lit. The field keeps a range so better hardware would need no protocol change, but the current board has no dimmer: the firmware blanks at 0 and lights otherwise, and the Pi only ever sends 0 or 100. See [hardware.md](hardware.md#display). |

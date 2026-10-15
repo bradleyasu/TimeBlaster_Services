@@ -25,6 +25,8 @@ type Manager interface {
 	RemoteStatus(ctx context.Context) (RemoteStatus, error)
 	// SetRemoteAccess starts or stops it.
 	SetRemoteAccess(ctx context.Context, on bool) (RemoteStatus, error)
+	// PowerOff shuts the system down.
+	PowerOff(ctx context.Context) error
 	// Available reports whether the helper is reachable.
 	Available() bool
 }
@@ -144,6 +146,12 @@ func (c *Client) SetRemoteAccess(ctx context.Context, on bool) (RemoteStatus, er
 		return RemoteStatus{}, fmt.Errorf("wifi: the helper reported no remote access state")
 	}
 	return *resp.Remote, nil
+}
+
+// PowerOff asks the helper to shut the system down.
+func (c *Client) PowerOff(ctx context.Context) error {
+	_, err := c.call(ctx, Request{Op: OpPowerOff})
+	return err
 }
 
 // Ping checks that the helper is alive.

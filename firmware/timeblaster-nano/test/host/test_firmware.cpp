@@ -16,6 +16,7 @@
 #include "../../src/Pins.h"
 #include "../../src/Protocol.h"
 #include "../../src/SevenSegment.h"
+#include "../../src/Shutdown.h"
 
 #include <cstdio>
 #include <string>
@@ -571,6 +572,272 @@ static void testTxStallDetection() {
         "a successful send clears the stall");
 }
 
+// --- Shutdown by holding the big red button ---------------------------------
+
+// The four cells of a frame as the driver shifts them out: last cell first, each
+// byte active low, every decimal point dark.
+static std::vector<uint8_t> frameOf(const char* four) {
+  const uint8_t DOT = 0b00000001;
+  std::vector<uint8_t> v;
+  for (int i = 3; i >= 0; i--) v.push_back((uint8_t)(~getCharacter(four[i]) | DOT));
+  return v;
+}
+
+static uint32_t piHeard = 1;   // when the Pi last spoke; non-zero means "connected"
+
+static void sdStep(uint32_t ms, bool down, bool alarm = false) {
+  hosttest::nowMs = ms;
+  piHeard = ms;   // a connected Pi speaks constantly
+  shutdownTick(ms, down, alarm, piHeard);
+  displayTick();
+}
+
+static bool sentRequest() {
+  return hosttest::serialOut.find("|SHUTDOWN|REQUEST|") != std::string::npos;
+}
+
+static int requestCount() {
+  int n = 0;
+  for (size_t at = 0; (at = hosttest::serialOut.find("|SHUTDOWN|REQUEST|", at)) != std::string::npos; at++) n++;
+  return n;
+}
+
+// sdBegin brings a synced display up with the button seen released, which is the
+// state of any Timeblaster that has been running for more than a moment.
+static void sdBegin() {
+  setupChainCapture();
+  displayInit();
+  displaySetSynced(true);
+  displaySetBrightness(75);
+  displayShowClock();
+  displaySetTime(22, 40);
+  Serial.setWriteRoom(4096);
+  shutdownInit();
+  sdStep(1000, false);              // released, after the settle window
+  hosttest::serialOut.clear();
+}
+
+static void testShutdownCountdown() {
+  section("shutdown countdown");
+  sdBegin();
+
+  // Pressed at 2000. Nothing shows for the first two seconds.
+  sdStep(2000, true);
+  sdStep(3500, true);
+  check(!displayShutdownActive(), "an ordinary press shows nothing");
+
+  // From two seconds in, the countdown: 8, 7, ... 1, 0.
+  const char* want[] = {"   8", "   7", "   6", "   5", "   4", "   3", "   2", "   1", "   0"};
+  for (int i = 0; i <= 8; i++) {
+    sdStep(2000 + 2000 + i * 1000, true);
+    char what[64];
+    snprintf(what, sizeof(what), "%d seconds held shows %s", 2 + i, want[i]);
+    checkBytes(hosttest::lastFrame, frameOf(want[i]), what);
+  }
+  check(!sentRequest(), "nothing is sent while the countdown runs");
+
+  // Half a second on "0", then the request and the animation.
+  sdStep(2000 + 10000 + SHUTDOWN_ZERO_MS, true);
+  check(sentRequest(), "the request is sent once the countdown has run out");
+  check(shutdownPhase() == SHUTDOWN_REQUESTED, "and the machine waits for the Pi");
+  check(isLoading(), "the loading animation runs while it waits");
+
+  // Held on past the end, ticking along: still exactly one request.
+  for (uint32_t t = 12600; t < 14000; t += 100) sdStep(t, true);
+  check(requestCount() == 1, "only one request per hold");
+}
+
+static void testShutdownCancelsOnRelease() {
+  section("shutdown cancels on release");
+  sdBegin();
+
+  sdStep(2000, true);
+  sdStep(7000, true);   // showing "5"
+  check(displayShutdownActive(), "the countdown is showing");
+
+  sdStep(7100, false);
+  check(shutdownPhase() == SHUTDOWN_IDLE, "letting go cancels");
+  check(!displayShutdownActive(), "and the display goes back to normal");
+  check(!sentRequest(), "and nothing was sent");
+  check(!isLoading(), "with no animation left running");
+}
+
+static void testShutdownNeverFromAnAlarmPress() {
+  section("shutdown never from silencing an alarm");
+
+  // Someone half-asleep leaning on the button to stop the alarm must not switch
+  // the alarm clock off, however long they lean.
+  //
+  // The alarm is ringing only at the instant of the press and stops on the very
+  // next pass -- dismissed from the app, or timing out on its own. That is the
+  // case only this rule covers: an alarm still ringing a second later would be
+  // caught by the mid-countdown check anyway, and the first version of this test
+  // passed for that reason with the rule deleted.
+  sdBegin();
+  sdStep(2000, true, /*alarm=*/true);
+  for (uint32_t t = 2050; t <= 20000; t += 250) sdStep(t, true, /*alarm=*/false);
+  check(!sentRequest(), "a press that began while ringing never shuts down");
+  check(!displayShutdownActive(), "and never shows a countdown");
+
+  // An alarm starting part-way through cancels, and the same press stays dead.
+  sdBegin();
+  sdStep(2000, true);
+  sdStep(6000, true);
+  check(displayShutdownActive(), "counting down");
+  sdStep(6100, true, /*alarm=*/true);
+  check(shutdownPhase() == SHUTDOWN_IDLE, "an alarm starting cancels the countdown");
+  for (uint32_t t = 6200; t <= 20000; t += 250) sdStep(t, true, false);
+  check(!sentRequest(), "and holding on afterwards does not resume it");
+
+  // Letting go and pressing again is a fresh, deliberate press.
+  sdStep(20100, false);
+  sdStep(21000, true);
+  sdStep(21000 + SHUTDOWN_HOLD_MS + SHUTDOWN_ZERO_MS, true);
+  check(sentRequest(), "a new press afterwards works normally");
+}
+
+static void testShutdownIgnoresAButtonHeldSinceBoot() {
+  section("shutdown ignores a button held since power-on");
+
+  // Stuck, or held down by something resting on it. Without this it would shut
+  // the Timeblaster down ten seconds after every boot.
+  setupChainCapture();
+  displayInit();
+  displaySetSynced(true);
+  displayShowClock();
+  Serial.setWriteRoom(4096);
+  shutdownInit();
+  hosttest::serialOut.clear();
+
+  for (uint32_t t = 0; t <= 30000; t += 100) sdStep(t, true);
+  check(!sentRequest(), "a button never seen released cannot shut down");
+  check(!displayShutdownActive(), "or show a countdown");
+
+  // The debounce reports "up" for its first few milliseconds whatever the pin
+  // says. That must not count as having seen it released.
+  shutdownInit();
+  sdStep(0, false);
+  sdStep(10, false);
+  for (uint32_t t = 30; t <= 30000; t += 100) sdStep(t, true);
+  check(!sentRequest(), "the debounce's start-up \"up\" is not a release");
+
+  // Once it has genuinely been let go, holding it works.
+  sdStep(30100, false);
+  sdStep(31000, true);
+  sdStep(31000 + SHUTDOWN_HOLD_MS + SHUTDOWN_ZERO_MS, true);
+  check(sentRequest(), "after a real release, a hold works");
+}
+
+static void testShutdownAnswers() {
+  section("shutdown answers from the Pi");
+
+  // Accepted: the animation stays, however long the Pi takes to go.
+  sdBegin();
+  sdStep(2000, true);
+  sdStep(2000 + SHUTDOWN_HOLD_MS + SHUTDOWN_ZERO_MS, true);
+  shutdownAnswer(true, hosttest::nowMs);
+  check(shutdownPhase() == SHUTDOWN_CONFIRMED, "accepted");
+  for (uint32_t t = 13000; t <= 13000 + SHUTDOWN_ANSWER_MS * 2; t += 500) sdStep(t, false);
+  check(shutdownPhase() == SHUTDOWN_CONFIRMED && isLoading(),
+        "once accepted, the animation does not time out");
+
+  // The Pi goes quiet and USB stayed powered: say it is off rather than going
+  // back to a clock that would look like it is still running.
+  uint32_t lastHeard = hosttest::nowMs;
+  for (uint32_t t = lastHeard; t <= lastHeard + SHUTDOWN_SILENT_MS + 1000; t += 500) {
+    hosttest::nowMs = t;
+    shutdownTick(t, false, false, lastHeard);
+    displayTick();
+  }
+  check(shutdownPhase() == SHUTDOWN_OFF, "a silent Pi after accepting means off");
+  checkBytes(hosttest::lastFrame, frameOf(" OFF"), "and the display says OFF");
+
+  // It comes back without the Nano losing power: back to normal.
+  uint32_t back = hosttest::nowMs + 500;
+  hosttest::nowMs = back;
+  shutdownTick(back, false, false, back);
+  displayTick();
+  check(shutdownPhase() == SHUTDOWN_IDLE && !displayShutdownActive(),
+        "hearing from the Pi again ends the OFF state");
+
+  // Refused: straight back to normal.
+  sdBegin();
+  sdStep(2000, true);
+  sdStep(2000 + SHUTDOWN_HOLD_MS + SHUTDOWN_ZERO_MS, true);
+  shutdownAnswer(false, hosttest::nowMs);
+  check(shutdownPhase() == SHUTDOWN_IDLE && !displayShutdownActive(), "refused goes back to normal");
+  check(!isLoading(), "with the animation stopped");
+}
+
+static void testShutdownSurvivesALostRequest() {
+  section("shutdown survives a lost request");
+
+  // The transmit path has died before. A request that never left must not leave
+  // an animation running that looks like a shutdown in progress.
+  sdBegin();
+  Serial.setWriteRoom(0);
+  sdStep(2000, true);
+  sdStep(2000 + SHUTDOWN_HOLD_MS + SHUTDOWN_ZERO_MS, true);
+  check(!sentRequest(), "the request was dropped by the full buffer");
+  check(shutdownPhase() == SHUTDOWN_REQUESTED, "but the machine believes it asked");
+
+  uint32_t asked = hosttest::nowMs;
+  sdStep(asked + SHUTDOWN_ANSWER_MS - 100, true);
+  check(shutdownPhase() == SHUTDOWN_REQUESTED, "it waits for an answer");
+  sdStep(asked + SHUTDOWN_ANSWER_MS, true);
+  check(shutdownPhase() == SHUTDOWN_IDLE && !displayShutdownActive() && !isLoading(),
+        "no answer in time goes back to normal");
+
+  // Still holding: that press is spent, so it does not start straight over.
+  Serial.setWriteRoom(4096);
+  for (uint32_t t = asked + SHUTDOWN_ANSWER_MS; t <= asked + 30000; t += 250) sdStep(t, true);
+  check(!sentRequest(), "the same press does not try again");
+}
+
+static void testShutdownShowsWithTheDisplayOff() {
+  section("shutdown shows with the display off");
+  sdBegin();
+  displaySetBrightness(0);
+  sdStep(2000, true);
+  sdStep(5000, true);
+  checkBytes(hosttest::lastFrame, frameOf("   7"),
+             "the countdown shows even with the display switched off");
+  sdStep(5100, false);
+  displayTick();
+  checkBytes(hosttest::lastFrame, frameOf("    "), "and the display goes back to off");
+}
+
+static void testWiFiButtonCannotArmShutdown() {
+  section("the Wi-Fi button cannot arm a shutdown");
+
+  // Through the real debounce, not a hand-fed flag: the countdown reads the big
+  // red button by name, and holding the Wi-Fi button for any length of time --
+  // its own five-second hold included -- must leave it untouched.
+  sdBegin();
+  hosttest::pinState[BUTTON_ALARM_OFF_PIN] = HIGH;   // active low: released
+  hosttest::pinState[BUTTON_WIFI_PIN] = HIGH;
+  inputsInit();
+  hosttest::nowMs = 1000;
+  inputsPoll();
+  hosttest::nowMs = 1050;
+  inputsPoll();
+  hosttest::serialOut.clear();
+
+  hosttest::pinState[BUTTON_WIFI_PIN] = LOW;          // Wi-Fi held
+  for (uint32_t t = 2000; t <= 20000; t += 50) {
+    hosttest::nowMs = t;
+    inputsPoll();
+    shutdownPoll(t, t);   // the same call loop() makes
+    displayTick();
+  }
+  check(inputsButtonDown("WIFI"), "the Wi-Fi button reads as held");
+  check(!inputsButtonDown("ALARM_OFF"), "the big red button does not");
+  check(!sentRequest() && !displayShutdownActive(),
+        "eighteen seconds on the Wi-Fi button never starts a shutdown");
+  check(hosttest::serialOut.find("|BUTTON|WIFI|DOWN|") != std::string::npos,
+        "and its press still reaches the Pi, which owns its five-second hold");
+}
+
 static void testFrameEscaping() {
   section("protocol escaping");
 
@@ -800,6 +1067,14 @@ int main() {
   testFrameEncoding();
   testFullBufferDropsRatherThanBlocks();
   testTxStallDetection();
+  testShutdownCountdown();
+  testShutdownCancelsOnRelease();
+  testShutdownNeverFromAnAlarmPress();
+  testShutdownIgnoresAButtonHeldSinceBoot();
+  testShutdownAnswers();
+  testShutdownSurvivesALostRequest();
+  testShutdownShowsWithTheDisplayOff();
+  testWiFiButtonCannotArmShutdown();
   testFrameEscaping();
   testFrameDecoding();
   testCorruptFramesAreDropped();
