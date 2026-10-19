@@ -38,7 +38,13 @@
 #include "Protocol.h"
 #include "Shutdown.h"
 
-#define FIRMWARE_VERSION "1.0.0"
+// Stamped at build time by version.py from the last commit to touch the
+// firmware's source. "1.0.0" sat here unchanged through every release, which
+// left the Pi unable to tell one firmware from another. The fallback covers
+// builds made without the script, such as the host tests.
+#ifndef FIRMWARE_VERSION
+#define FIRMWARE_VERSION "dev"
+#endif
 #define HARDWARE_ID      "nano-esp32"
 
 static const unsigned long SERIAL_BAUD = 115200;
@@ -238,8 +244,9 @@ void loop() {
     lastPing = now;
     // The dropped count rides along, so a transmit path that is discarding
     // everything is visible in the Pi's link status. It is zero in normal
-    // operation, which is what makes a non-zero value worth looking at.
-    protocolSend2("PING", String(now), String(protocolDroppedFrames()));
+    // operation, which is what makes a non-zero value worth looking at. The
+    // version lets the Pi tell whether the firmware it holds is newer.
+    protocolSendPing(now, FIRMWARE_VERSION);
   }
 
   // Still being spoken to, but nothing getting out: restart rather than sit

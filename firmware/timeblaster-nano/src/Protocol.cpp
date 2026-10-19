@@ -134,6 +134,11 @@ void protocolSend2(const String& type, const String& a, const String& b) {
   protocolSend(type, args, 2);
 }
 
+void protocolSendPing(uint32_t now, const char* version) {
+  String args[3] = {String(now), String(protocolDroppedFrames()), String(version)};
+  protocolSend("PING", args, 3);
+}
+
 // unescapeField reverses appendEscaped.
 static String unescapeField(const char* s, uint16_t len) {
   String out;

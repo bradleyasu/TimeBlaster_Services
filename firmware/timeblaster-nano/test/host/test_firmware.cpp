@@ -614,6 +614,19 @@ static void sdStep(uint32_t ms, bool down, bool alarm = false) {
   displayTick();
 }
 
+// The Pi learns the firmware version from PING, because HELLO is sent once at
+// boot and is usually missed. Without it the update button cannot tell whether
+// the Nano is already current.
+static void testPingCarriesTheVersion() {
+  hosttest::serialOut.clear();
+  Serial.setWriteRoom(4096);
+  protocolSendPing(12345, "abc1234");
+  check(hosttest::serialOut.find("|PING|12345|") != std::string::npos,
+        "a PING carries the uptime first, where older Pis expect it");
+  check(hosttest::serialOut.find("|abc1234|") != std::string::npos,
+        "and the firmware version as its third argument");
+}
+
 static bool sentRequest() {
   return hosttest::serialOut.find("|SHUTDOWN|REQUEST|") != std::string::npos;
 }
@@ -1098,6 +1111,7 @@ int main() {
   testShutdownShowsWithTheDisplayOff();
   testWiFiButtonCannotArmShutdown();
   testFrameEscaping();
+  testPingCarriesTheVersion();
   testFrameDecoding();
   testCorruptFramesAreDropped();
   testPotReporting();

@@ -39,6 +39,13 @@ void protocolSend0(const String& type);
 void protocolSend1(const String& type, const String& a);
 void protocolSend2(const String& type, const String& a, const String& b);
 
+// protocolSendPing sends the liveness beacon: uptime, the dropped-frame count,
+// and the firmware version. The version rides on every PING rather than only
+// on HELLO because HELLO is easily missed -- the Nano sends it once at boot,
+// often before the Pi has opened the port, and a restarted daemon never sees
+// it at all. The Pi needs the version to know whether an update is available.
+void protocolSendPing(uint32_t now, const char* version);
+
 // protocolDroppedFrames counts frames abandoned because the USB CDC transmit
 // buffer was full, rather than blocking loop() waiting for the host. Reported
 // in every PING, so a transmit path that is quietly discarding everything is
