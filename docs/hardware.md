@@ -281,7 +281,7 @@ Controller firmware → UPDATE FIRMWARE** is enabled; otherwise it is greyed out
 It never updates on its own -- only the button starts one. The update is
 refused while an alarm is ringing.
 
-An update takes about half a minute. The daemon releases the serial port, the
+An update takes about fifteen seconds. The daemon releases the serial port, the
 root helper runs `dfu-util -d 2341:0070 -R -D <image>`, the Nano restarts into
 the new firmware, and the update only counts as done once the Nano reports the
 new version over the link.

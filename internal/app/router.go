@@ -10,6 +10,7 @@ import (
 
 	"github.com/bradsheets/timeblaster/internal/alarm"
 	"github.com/bradsheets/timeblaster/internal/ersatztv"
+	"github.com/bradsheets/timeblaster/internal/hardware"
 	"github.com/bradsheets/timeblaster/internal/input"
 	"github.com/bradsheets/timeblaster/internal/protocol"
 	"github.com/bradsheets/timeblaster/internal/state"
@@ -288,7 +289,12 @@ func (a *App) LinkUp(device string) {
 
 // LinkDown records the Nano disappearing.
 func (a *App) LinkDown(err error) {
-	a.log.Warn("Nano link lost; physical controls are unavailable until it returns", "error", err)
+	if errors.Is(err, hardware.ErrPaused) {
+		// A firmware update, which logs its own progress. Not a fault.
+		a.log.Info("Nano link paused for a firmware update")
+	} else {
+		a.log.Warn("Nano link lost; physical controls are unavailable until it returns", "error", err)
+	}
 	a.router.Reset()
 	a.publish(state.NewEvent(state.EventHardwareChanged, map[string]any{
 		"connected": false,

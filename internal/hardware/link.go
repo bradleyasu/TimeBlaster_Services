@@ -358,7 +358,7 @@ func (l *Link) Run(ctx context.Context) error {
 		if l.pausedUntil() != nil {
 			// Released on purpose. Not an error, and nothing to back off from.
 			if live {
-				l.notifyDown(errPaused)
+				l.notifyDown(ErrPaused)
 			}
 			l.log.Info("hardware link paused; serial port released", "device", device)
 			continue
@@ -378,8 +378,9 @@ func (l *Link) Run(ctx context.Context) error {
 	}
 }
 
-// errPaused ends a session that Pause asked to release the port.
-var errPaused = errors.New("hardware: link paused")
+// ErrPaused ends a session that Pause asked to release the port. LinkDown
+// receives it, so a deliberate pause can be told apart from a lost Nano.
+var ErrPaused = errors.New("hardware: link paused")
 
 // pausedUntil returns the channel Resume will close, or nil when not paused.
 func (l *Link) pausedUntil() chan struct{} {
@@ -443,7 +444,7 @@ func (l *Link) session(ctx context.Context, t serialport.Transport, device strin
 	l.pauseMu.Lock()
 	if l.resume != nil {
 		l.pauseMu.Unlock()
-		return errPaused
+		return ErrPaused
 	}
 	l.cancelSession = cancel
 	l.pauseMu.Unlock()

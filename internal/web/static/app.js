@@ -879,11 +879,11 @@
 
     var hint;
     if (fw.updating) {
-      hint = 'Installing. The display and knobs stop for about half a minute, then come back on their own.';
+      hint = 'Installing. The display and knobs stop for about fifteen seconds, then come back on their own.';
     } else if (fw.last_result === 'failed') {
       hint = 'The last update did not finish: ' + (fw.last_error || 'unknown error') + '.';
     } else if (fw.update_available) {
-      hint = 'Newer firmware is available. The display and knobs stop for about half a minute while it installs.';
+      hint = 'Newer firmware is available. The display and knobs stop for about fifteen seconds while it installs.';
     } else if (!fw.available) {
       hint = 'There is no firmware on the Timeblaster to install.';
     } else if (fw.running === fw.available) {
@@ -1014,7 +1014,7 @@
     });
 
     $('btn-update-firmware').addEventListener('click', function () {
-      if (!confirm('Update the controller firmware? The display and knobs will stop for about half a minute while it installs. Do not unplug the Timeblaster until it finishes.')) return;
+      if (!confirm('Update the controller firmware? The display and knobs will stop for about fifteen seconds while it installs. Do not unplug the Timeblaster until it finishes.')) return;
       var btn = $('btn-update-firmware');
       btn.disabled = true;
       api('POST', 'api/firmware/update')
