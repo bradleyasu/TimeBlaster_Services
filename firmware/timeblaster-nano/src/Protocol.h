@@ -49,6 +49,11 @@ uint32_t protocolDroppedFrames();
 // nothing has been sent yet.
 uint32_t protocolLastTxOkMs();
 
+// protocolMsSinceTxOk is how long ago the last frame was written, as seen from
+// now. Never negative, even when that frame went out after now was sampled --
+// see msSince in Protocol.cpp for why that matters.
+uint32_t protocolMsSinceTxOk(uint32_t now);
+
 // protocolTxStalled reports whether sending has stopped working while the Pi is
 // still being heard from.
 //

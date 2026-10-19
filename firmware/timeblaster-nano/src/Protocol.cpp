@@ -81,6 +81,26 @@ uint32_t protocolDroppedFrames() { return txDropped; }
 
 uint32_t protocolLastTxOkMs() { return txLastOkMs; }
 
+// msSince is how long ago `then` was, as seen from `now`, and never negative.
+//
+// The obvious `now - then` is wrong here. Callers sample millis() once at the
+// top of loop() and then send frames, so a timestamp recorded during the send
+// can be a millisecond *after* `now`. In unsigned arithmetic that difference is
+// not -1 but about 4.29 billion -- which read as "nothing sent for 49 days" and
+// restarted a Nano whose transmitter was working perfectly, right after a PING
+// that had gone out fine. It needed a write slow enough to cross a millisecond
+// boundary, so it struck when the Pi was busy draining USB: twenty seconds into
+// every boot, as ErsatzTV started, and now and then otherwise.
+//
+// The signed difference also survives millis() wrapping at 49.7 days, for any
+// interval shorter than 24.8 days.
+static uint32_t msSince(uint32_t now, uint32_t then) {
+  int32_t d = (int32_t)(now - then);
+  return d < 0 ? 0 : (uint32_t)d;
+}
+
+uint32_t protocolMsSinceTxOk(uint32_t now) { return msSince(now, txLastOkMs); }
+
 bool protocolTxStalled(uint32_t now, uint32_t lastRxMs,
                        uint32_t txStallMs, uint32_t rxFreshMs) {
   // The Pi has to have been heard from recently. Both directions idle is an
@@ -91,10 +111,10 @@ bool protocolTxStalled(uint32_t now, uint32_t lastRxMs,
   // until the first message, so the gap is the whole uptime and far past any
   // sensible freshness window. An explicit zero check sat here first and no test
   // could reach it.
-  if (now - lastRxMs > rxFreshMs) return false;
+  if (msSince(now, lastRxMs) > rxFreshMs) return false;
 
   // Still being spoken to, but nothing has left here in a long time.
-  return now - txLastOkMs > txStallMs;
+  return msSince(now, txLastOkMs) > txStallMs;
 }
 
 void protocolResetTxHealth(uint32_t now) {

@@ -71,9 +71,17 @@ static const uint32_t MAX_TX_RECOVERIES = 3;
 // back, rather than counting the first PING after a restart as success.
 static const uint32_t TX_HEALTHY_MS = 120000;
 
-// Survives ESP.restart(), cleared on a power-on reset in setup(), so the cap
-// counts consecutive failed recoveries rather than restarting forever.
-RTC_DATA_ATTR static uint32_t txRecoveries = 0;
+// Counts consecutive restarts made to recover the transmit path, so the cap can
+// stop them. It has to survive ESP.restart(), which is what RTC_NOINIT_ATTR is
+// for. It was RTC_DATA_ATTR at first, which only survives deep sleep: the count
+// went back to zero on every restart and the cap never applied -- one boot
+// restarted six times against a limit of three.
+//
+// noinit memory holds garbage after power-on, so the value is only trusted when
+// the magic beside it matches, and only across a restart this firmware asked for.
+static const uint32_t TX_RECOVERY_MAGIC = 0x7B5A11ED;
+RTC_NOINIT_ATTR static uint32_t txRecoveries;
+RTC_NOINIT_ATTR static uint32_t txRecoveryMagic;
 
 // --- Local clock ------------------------------------------------------------
 //
@@ -189,11 +197,12 @@ static void handleMessage(const Message& msg) {
 // --- Setup and loop ---------------------------------------------------------
 
 void setup() {
-  // RTC memory keeps its contents across a software restart but is undefined
-  // after power-on, so the recovery count is only meaningful once anchored to a
-  // reset that was not a cold boot.
-  if (esp_reset_reason() == ESP_RST_POWERON) {
+  // Only a restart this firmware made itself carries the count forward. Power-on
+  // leaves noinit memory holding garbage, and a brownout or watchdog reset is not
+  // one of our recoveries and should not use up their budget.
+  if (esp_reset_reason() != ESP_RST_SW || txRecoveryMagic != TX_RECOVERY_MAGIC) {
     txRecoveries = 0;
+    txRecoveryMagic = TX_RECOVERY_MAGIC;
   }
 
   Serial.begin(SERIAL_BAUD);
@@ -242,7 +251,7 @@ void loop() {
       ESP.restart();
     }
   } else if (txRecoveries > 0 && now > TX_HEALTHY_MS &&
-             now - protocolLastTxOkMs() < PING_INTERVAL_MS * 2) {
+             protocolMsSinceTxOk(now) < PING_INTERVAL_MS * 2) {
     // Sending has worked steadily since the restart, so the next fault gets a
     // full budget again instead of inheriting an exhausted one.
     txRecoveries = 0;

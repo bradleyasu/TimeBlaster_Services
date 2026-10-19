@@ -570,6 +570,28 @@ static void testTxStallDetection() {
   protocolSend1("PING", "ok");
   check(!protocolTxStalled(hosttest::nowMs, hosttest::nowMs - 100, STALL, FRESH),
         "a successful send clears the stall");
+
+  // The bug that restarted the Nano during boot. loop() samples millis() once,
+  // then sends a PING; if the clock ticks during the write, the frame is stamped
+  // a millisecond *after* the `now` the stall check is given. Unsigned, that
+  // difference was 4.29 billion milliseconds, so a working transmitter that had
+  // just sent a PING was declared dead and restarted. Busy Pi, slow USB drain,
+  // write crosses a millisecond: twenty seconds into every boot.
+  hosttest::nowMs = 50001;
+  protocolSend1("PING", "50000");
+  check(!protocolTxStalled(50000, 49990, STALL, FRESH),
+        "a frame sent a millisecond after now was sampled is not a stall");
+  check(protocolMsSinceTxOk(50000) == 0,
+        "and it counts as sent zero milliseconds ago, not 4.29 billion");
+
+  // millis() wraps at 49.7 days. A frame sent just before the wrap, checked just
+  // after it, is recent.
+  hosttest::nowMs = 0xFFFFFFF0u;
+  protocolSend1("PING", "wrap");
+  check(!protocolTxStalled(0x00000010u, 0x00000008u, STALL, FRESH),
+        "a frame sent just before millis() wrapped is recent, not stale");
+  check(protocolMsSinceTxOk(0x00000010u) == 0x20,
+        "and the elapsed time across the wrap is right");
 }
 
 // --- Shutdown by holding the big red button ---------------------------------
