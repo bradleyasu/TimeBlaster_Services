@@ -473,6 +473,33 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.deps.Settings.Settings())
 }
 
+// --- firmware ----------------------------------------------------------------
+
+func (s *Server) handleGetFirmware(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Firmware == nil {
+		writeJSON(w, http.StatusOK, FirmwareStatus{})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.deps.Firmware.FirmwareStatus())
+}
+
+func (s *Server) handleUpdateFirmware(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Firmware == nil {
+		writeError(w, http.StatusConflict, "this Timeblaster cannot update its controller")
+		return
+	}
+	if err := s.deps.Firmware.UpdateFirmware(); err != nil {
+		if errors.Is(err, ErrFirmwareRefused) {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "could not start the update", err.Error())
+		return
+	}
+	// Accepted, not done: the result arrives as a firmware_changed event.
+	writeJSON(w, http.StatusAccepted, s.deps.Firmware.FirmwareStatus())
+}
+
 func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	current := s.deps.Settings.Settings()
 

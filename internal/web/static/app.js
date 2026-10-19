@@ -198,6 +198,9 @@
         // patching that can drift out of step.
         refresh();
         break;
+      case 'firmware_changed':
+        renderFirmware(msg.data);
+        break;
     }
   }
 
@@ -824,6 +827,8 @@
       renderAppVersion(h.version);
     }).catch(function () { /* the system tab is best-effort */ });
 
+    loadFirmware();
+
     var wifi = (state && state.wifi) || {};
     var kv = $('wifi-status');
     kv.innerHTML = '';
@@ -839,6 +844,70 @@
         '<span class="value">' + escapeHTML(String(pair[1])) + '</span>';
       kv.appendChild(row);
     });
+  }
+
+  // --- Controller firmware -------------------------------------------------
+
+  // firmwareWasUpdating remembers the last status seen, so the end of an update
+  // is announced once rather than on every later render.
+  var firmwareWasUpdating = false;
+  var firmwarePoll = null;
+
+  function loadFirmware() {
+    return api('GET', 'api/firmware').then(renderFirmware).catch(function () {});
+  }
+
+  function renderFirmware(fw) {
+    if (!fw) return;
+    var kv = $('firmware-status');
+    kv.innerHTML = '';
+    [
+      // Firmware from before versions were reported cannot say what it is.
+      ['Running', fw.running || 'unknown'],
+      ['Available', fw.available || '\u2014']
+    ].forEach(function (pair) {
+      var row = document.createElement('div');
+      row.className = 'kv-row';
+      row.innerHTML = '<span class="name">' + escapeHTML(pair[0]) + '</span>' +
+        '<span class="value">' + escapeHTML(pair[1]) + '</span>';
+      kv.appendChild(row);
+    });
+
+    var btn = $('btn-update-firmware');
+    btn.disabled = !fw.update_available || fw.updating;
+    btn.textContent = fw.updating ? 'UPDATING\u2026' : 'UPDATE FIRMWARE';
+
+    var hint;
+    if (fw.updating) {
+      hint = 'Installing. The display and knobs stop for about half a minute, then come back on their own.';
+    } else if (fw.last_result === 'failed') {
+      hint = 'The last update did not finish: ' + (fw.last_error || 'unknown error') + '.';
+    } else if (fw.update_available) {
+      hint = 'Newer firmware is available. The display and knobs stop for about half a minute while it installs.';
+    } else if (!fw.available) {
+      hint = 'There is no firmware on the Timeblaster to install.';
+    } else if (fw.running === fw.available) {
+      hint = 'The controller firmware is up to date.';
+    } else {
+      hint = 'The controller is not responding, so it cannot be updated right now.';
+    }
+    $('firmware-hint').textContent = hint;
+
+    if (firmwareWasUpdating && !fw.updating) {
+      if (fw.last_result === 'updated') toast('Controller firmware updated.');
+      else if (fw.last_result === 'failed') toast('Firmware update failed: ' + (fw.last_error || 'unknown error'), true);
+    }
+    firmwareWasUpdating = !!fw.updating;
+
+    // The result normally arrives as an event. Polling as well covers a
+    // WebSocket that dropped mid-update and would otherwise leave the button
+    // saying UPDATING forever.
+    if (fw.updating && !firmwarePoll) {
+      firmwarePoll = setInterval(loadFirmware, 3000);
+    } else if (!fw.updating && firmwarePoll) {
+      clearInterval(firmwarePoll);
+      firmwarePoll = null;
+    }
   }
 
   function cssStatus(s) {
@@ -942,6 +1011,15 @@
     $('set-timezone').addEventListener('change', function () { saveSettings(true); });
     $('btn-stop-preview').addEventListener('click', function () {
       api('POST', 'api/sounds/preview/stop').catch(fail);
+    });
+
+    $('btn-update-firmware').addEventListener('click', function () {
+      if (!confirm('Update the controller firmware? The display and knobs will stop for about half a minute while it installs. Do not unplug the Timeblaster until it finishes.')) return;
+      var btn = $('btn-update-firmware');
+      btn.disabled = true;
+      api('POST', 'api/firmware/update')
+        .then(renderFirmware)
+        .catch(function (err) { fail(err); loadFirmware(); });
     });
 
     $('btn-wifi-setup').addEventListener('click', function () {

@@ -208,6 +208,7 @@ PACKAGES=(
   curl
   tar
   libicu-dev          # ErsatzTV's .NET runtime needs ICU
+  dfu-util            # flashes the Nano's firmware, from the companion app's button
 )
 
 install_packages() {
@@ -540,6 +541,37 @@ install_modules_load() {
   # Load it now too, so this boot does not have to wait for the next one.
   run modprobe cdc_acm
   ok "installed ${dst} (cdc_acm, so char-ttyACM resolves before services start)"
+}
+
+install_firmware() {
+  step "Installing the Nano firmware image"
+
+  # Only installed, never flashed: the companion app's System tab offers the
+  # update when this is newer than what the Nano reports, and the user decides.
+  local src_dir="${SCRIPT_DIR}/deploy/firmware"
+  local dst_dir="/usr/local/share/timeblaster/firmware"
+  local changed=0
+
+  if [[ ! -f "${src_dir}/nano-firmware.bin" ]]; then
+    skip "no firmware image shipped"
+    return
+  fi
+
+  # root-owned: the helper flashes whatever is here, as root, so nothing else
+  # may be able to replace it.
+  run install -d -m 0755 -o root -g root "$dst_dir"
+  for f in nano-firmware.bin nano-firmware.version; do
+    if [[ -f "${dst_dir}/${f}" ]] && cmp -s "${src_dir}/${f}" "${dst_dir}/${f}"; then
+      continue
+    fi
+    run install -m 0644 -o root -g root "${src_dir}/${f}" "${dst_dir}/${f}"
+    changed=1
+  done
+  if (( changed )); then
+    ok "installed firmware $(cat "${src_dir}/nano-firmware.version") (update from the app's System tab)"
+  else
+    skip "firmware image is already current"
+  fi
 }
 
 configure_journald() {
@@ -1364,6 +1396,7 @@ main() {
   install_assets
   install_udev
   install_modules_load
+  install_firmware
   configure_journald
   configure_bootloader
   install_etv_offline_image

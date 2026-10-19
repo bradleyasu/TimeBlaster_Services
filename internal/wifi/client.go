@@ -27,6 +27,9 @@ type Manager interface {
 	SetRemoteAccess(ctx context.Context, on bool) (RemoteStatus, error)
 	// PowerOff shuts the system down.
 	PowerOff(ctx context.Context) error
+	// FlashNano writes the shipped firmware to the Nano. ctx bounds it; a
+	// flash takes far longer than the helper's ordinary timeout.
+	FlashNano(ctx context.Context) error
 	// Available reports whether the helper is reachable.
 	Available() bool
 }
@@ -154,6 +157,14 @@ func (c *Client) PowerOff(ctx context.Context) error {
 	return err
 }
 
+// FlashNano asks the helper to write the shipped firmware to the Nano. Only
+// ctx bounds the call, because the client's usual timeout is sized for nmcli
+// and a flash takes longer.
+func (c *Client) FlashNano(ctx context.Context) error {
+	_, err := c.callWithin(ctx, Request{Op: OpFlashNano}, 0)
+	return err
+}
+
 // Ping checks that the helper is alive.
 func (c *Client) Ping(ctx context.Context) error {
 	_, err := c.call(ctx, Request{Op: OpPing})
@@ -161,10 +172,19 @@ func (c *Client) Ping(ctx context.Context) error {
 }
 
 func (c *Client) call(ctx context.Context, req Request) (Response, error) {
+	return c.callWithin(ctx, req, c.timeout)
+}
+
+// callWithin makes one call bounded by timeout as well as ctx. Zero leaves ctx
+// as the only bound.
+func (c *Client) callWithin(ctx context.Context, req Request, timeout time.Duration) (Response, error) {
 	req.Version = ProtocolVersion
 
-	ctx, cancel := context.WithTimeout(ctx, c.timeout)
-	defer cancel()
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
 
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", c.socket)

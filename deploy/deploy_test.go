@@ -119,3 +119,43 @@ func TestDeployedScriptsAreCommittedExecutable(t *testing.T) {
 		}
 	}
 }
+
+// The Pi offers a firmware update when the shipped image's version differs from
+// what the Nano reports. Committing firmware changes without running
+// `make firmware-release` would leave the Pi offering the old image as though
+// it were current -- and a release built from other source would be flashed
+// under a version that names the wrong code.
+func TestShippedFirmwareMatchesTheFirmwareSource(t *testing.T) {
+	root := repoRoot(t)
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not available")
+	}
+	out, err := exec.Command("git", "-C", root, "log", "-1", "--format=%H", "--",
+		"firmware/timeblaster-nano/src",
+		"firmware/timeblaster-nano/platformio.ini",
+		"firmware/timeblaster-nano/version.py").Output()
+	want := strings.TrimSpace(string(out))
+	if err != nil || want == "" {
+		t.Skip("no firmware history in this checkout (shallow clone?)")
+	}
+
+	raw, err := os.ReadFile(filepath.Join(root, "deploy/firmware/nano-firmware.version"))
+	if err != nil {
+		t.Fatalf("no shipped firmware version: %v (run make firmware-release)", err)
+	}
+	version := strings.TrimSpace(string(raw))
+	if len(version) < 7 || !strings.HasPrefix(want, version) {
+		t.Errorf("deploy/firmware is version %q, but the firmware source was last changed in %.12s.\n"+
+			"Run `make firmware-release` and commit deploy/firmware/.", version, want)
+	}
+
+	image, err := os.ReadFile(filepath.Join(root, "deploy/firmware/nano-firmware.bin"))
+	if err != nil {
+		t.Fatalf("no shipped firmware image: %v", err)
+	}
+	// The version is compiled in as a string, so an image and version file
+	// from different builds disagree here.
+	if !strings.Contains(string(image), version) {
+		t.Errorf("nano-firmware.bin does not contain its own version %q; the two files are from different builds", version)
+	}
+}

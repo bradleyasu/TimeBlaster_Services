@@ -53,6 +53,10 @@ const (
 	// OpPowerOff shuts the system down. It takes no arguments: there is nothing
 	// in the request a caller could use to make it do anything else.
 	OpPowerOff Op = "power_off"
+	// OpFlashNano writes the shipped firmware image to the Nano. Like
+	// OpPowerOff it takes no arguments: the image and the device are fixed by
+	// the helper's configuration.
+	OpFlashNano Op = "flash_nano"
 )
 
 // Request is one RPC call.
@@ -167,7 +171,7 @@ func (r Request) Validate() error {
 	}
 	switch r.Op {
 	case OpStatus, OpEnterSetup, OpExitSetup, OpScan, OpPing,
-		OpRemoteStatus, OpRemoteOn, OpRemoteOff, OpPowerOff:
+		OpRemoteStatus, OpRemoteOn, OpRemoteOff, OpPowerOff, OpFlashNano:
 		return nil
 	case OpConnect:
 		return ValidateCredentials(r.SSID, r.Passphrase)

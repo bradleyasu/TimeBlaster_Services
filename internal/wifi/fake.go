@@ -33,6 +33,10 @@ type FakeManager struct {
 	RemoteErr error
 	// PowerOffErr makes only PowerOff fail.
 	PowerOffErr error
+	// FlashErr makes only FlashNano fail. OnFlash, when set, runs during the
+	// flash, which is where a test plays the part of the restarting Nano.
+	FlashErr error
+	OnFlash  func()
 }
 
 // RemoteStatus reports the fake's remote access state.
@@ -77,6 +81,21 @@ func (f *FakeManager) PowerOff(ctx context.Context) error {
 		return f.PowerOffErr
 	}
 	return f.Err
+}
+
+// FlashNano records the request and runs OnFlash.
+func (f *FakeManager) FlashNano(ctx context.Context) error {
+	f.mu.Lock()
+	f.calls = append(f.calls, "flash_nano")
+	hook, err := f.OnFlash, f.FlashErr
+	if err == nil {
+		err = f.Err
+	}
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	return err
 }
 
 // NewFakeManager returns a fake in the normal (connected) state.

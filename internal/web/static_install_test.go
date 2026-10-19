@@ -331,3 +331,26 @@ func TestRemoteAccessSwitchIsHiddenWhenItCannotWork(t *testing.T) {
 		t.Error("the switch is not sent when settings are saved, so flipping it does nothing")
 	}
 }
+
+func TestFirmwareUpdateOnlyStartsFromTheButton(t *testing.T) {
+	// Never automatic. The one request that flashes the Nano must sit inside
+	// the button's click handler, and the button starts disabled until the
+	// status says there is something to install.
+	js := readStatic(t, "app.js")
+	if n := strings.Count(js, "api/firmware/update"); n != 1 {
+		t.Fatalf("app.js mentions api/firmware/update %d times, want exactly once", n)
+	}
+	handler := strings.Index(js, "$('btn-update-firmware').addEventListener('click'")
+	call := strings.Index(js, "api/firmware/update")
+	if handler < 0 || call < handler || call-handler > 600 {
+		t.Error("the update request is not inside the update button's click handler")
+	}
+	if !strings.Contains(js[handler:call], "confirm(") {
+		t.Error("the update starts without asking first")
+	}
+
+	html := readStatic(t, "index.html")
+	if !regexp.MustCompile(`<button[^>]*id="btn-update-firmware"[^>]*\bdisabled\b`).MatchString(html) {
+		t.Error("the update button is enabled before anything says an update is available")
+	}
+}

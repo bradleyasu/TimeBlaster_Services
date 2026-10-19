@@ -115,8 +115,10 @@ type Status struct {
 	// Live means the Nano has actually spoken recently. This is the field worth
 	// showing a user: a firmware that stops transmitting leaves Connected true
 	// forever while the link is, in every way that matters, down.
-	Live            bool      `json:"live"`
-	Device          string    `json:"device,omitempty"`
+	Live   bool   `json:"live"`
+	Device string `json:"device,omitempty"`
+	// Firmware is the version the Nano reports, from PING and HELLO. Empty
+	// until it has said, and for firmware too old to say.
 	Firmware        string    `json:"firmware,omitempty"`
 	ConnectedAt     time.Time `json:"connected_at,omitzero"`
 	LastMessageAt   time.Time `json:"last_message_at,omitzero"`
@@ -131,6 +133,9 @@ type Status struct {
 	FirmwareTxDropped int64  `json:"firmware_tx_dropped"`
 	DroppedWrites     int64  `json:"dropped_writes"`
 	LastError         string `json:"last_error,omitempty"`
+	// Paused means the port has been deliberately released -- for a firmware
+	// update -- and the link will not reconnect until it is resumed.
+	Paused bool `json:"paused,omitempty"`
 }
 
 // Link is a supervised session with the Nano.
@@ -175,6 +180,13 @@ type Link struct {
 	// by mu.
 	txDroppedSeen bool
 	lastTxDropLog time.Time
+
+	// pauseMu guards the pause state. resume is non-nil exactly while paused,
+	// and is closed to let Run reconnect. cancelSession ends the running
+	// session, if there is one.
+	pauseMu       sync.Mutex
+	resume        chan struct{}
+	cancelSession context.CancelFunc
 }
 
 // Deps are the link's collaborators.
@@ -294,6 +306,15 @@ func (l *Link) Run(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		if resume := l.pausedUntil(); resume != nil {
+			select {
+			case <-resume:
+				l.log.Info("hardware link resumed")
+				backoff = l.cfg.ReconnectMin
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
 
 		transport, device, err := l.opener.Open(ctx)
 		if err != nil {
@@ -334,6 +355,14 @@ func (l *Link) Run(ctx context.Context) error {
 			}
 			return ctx.Err()
 		}
+		if l.pausedUntil() != nil {
+			// Released on purpose. Not an error, and nothing to back off from.
+			if live {
+				l.notifyDown(errPaused)
+			}
+			l.log.Info("hardware link paused; serial port released", "device", device)
+			continue
+		}
 		l.recordError(err)
 		// A session that never produced a byte never came up, so there is no
 		// "down" to report: the link has simply stayed broken.
@@ -349,15 +378,89 @@ func (l *Link) Run(ctx context.Context) error {
 	}
 }
 
+// errPaused ends a session that Pause asked to release the port.
+var errPaused = errors.New("hardware: link paused")
+
+// pausedUntil returns the channel Resume will close, or nil when not paused.
+func (l *Link) pausedUntil() chan struct{} {
+	l.pauseMu.Lock()
+	defer l.pauseMu.Unlock()
+	return l.resume
+}
+
+// Pause closes the serial port and keeps it closed until Resume, so another
+// program -- dfu-util, flashing new firmware -- can have the Nano to itself.
+// It returns once the port is closed, or with ctx's error if that takes too
+// long. Pausing an already-paused link is harmless.
+func (l *Link) Pause(ctx context.Context) error {
+	l.pauseMu.Lock()
+	if l.resume == nil {
+		l.resume = make(chan struct{})
+	}
+	cancel := l.cancelSession
+	l.pauseMu.Unlock()
+	l.mu.Lock()
+	l.status.Paused = true
+	l.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	// Real time, not the link's clock: this waits on goroutines, not on the
+	// passage of time the link schedules by.
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for l.connected.Load() {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("hardware: the serial port was not released: %w", ctx.Err())
+		case <-tick.C:
+		}
+	}
+	return nil
+}
+
+// Resume lets the link reconnect after Pause. Resuming a running link is
+// harmless.
+func (l *Link) Resume() {
+	l.pauseMu.Lock()
+	if l.resume != nil {
+		close(l.resume)
+		l.resume = nil
+	}
+	l.pauseMu.Unlock()
+	l.mu.Lock()
+	l.status.Paused = false
+	l.mu.Unlock()
+}
+
 // session runs one connected session, returning when it ends.
 func (l *Link) session(ctx context.Context, t serialport.Transport, device string) error {
 	sessionCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	// A pause that landed while the port was being opened must not be missed:
+	// Pause only cancels a session it can see.
+	l.pauseMu.Lock()
+	if l.resume != nil {
+		l.pauseMu.Unlock()
+		return errPaused
+	}
+	l.cancelSession = cancel
+	l.pauseMu.Unlock()
+	defer func() {
+		l.pauseMu.Lock()
+		l.cancelSession = nil
+		l.pauseMu.Unlock()
+	}()
+
 	now := l.clock.Now()
 	l.mu.Lock()
 	l.status.Device = device
 	l.status.ConnectedAt = now
+	// Whatever is on the other end reports its own version. Keeping the last
+	// one would show the old version through a firmware update, or another
+	// board's after a swap.
+	l.status.Firmware = ""
 	// LastMessageAt is deliberately NOT stamped here. Opening the port proves
 	// nothing about the Nano: a wedged board still enumerates and still accepts
 	// an open, so stamping it made "has never said a word" look identical to
@@ -558,6 +661,13 @@ func (l *Link) dispatch(msg protocol.Message) {
 		// firmware sends uptime alone, so a missing argument is not an error.
 		if dropped, err := msg.Int64Arg(1); err == nil {
 			l.noteDroppedFrames(dropped)
+		}
+		// And its version, which HELLO also carries but is easily missed: the
+		// Nano sends it once at boot, usually before this port is open.
+		if version := msg.Arg(2); version != "" {
+			l.mu.Lock()
+			l.status.Firmware = version
+			l.mu.Unlock()
 		}
 
 	case protocol.TypeHello:

@@ -1131,3 +1131,74 @@ func TestAnswerShutdownReachesTheNano(t *testing.T) {
 		t.Errorf("the refusal lost its reason: %q", m.Arg(1))
 	}
 }
+
+func TestLinkReadsTheFirmwareVersionFromPing(t *testing.T) {
+	// HELLO carries the version too, but is sent once at boot -- usually before
+	// the port is open -- and a restarted daemon never sees it. Without the
+	// version the update button cannot tell a current Nano from a stale one.
+	cfg := DefaultConfig()
+	f, nanos := newLinkFixture(t, cfg, 1)
+	nano := newNanoSide(t, nanos[0])
+	waitUntil(t, "the port to open", f.link.Connected)
+
+	nano.send(protocol.Message{Seq: 1, Type: protocol.TypePing, Args: []string{"1000", "0", "abc1234"}})
+	waitUntil(t, "the version", func() bool { return f.link.Status().Firmware == "abc1234" })
+
+	// Firmware from before the version was added sends two arguments. That is
+	// "not reported in this PING", not "no version".
+	nano.send(protocol.Message{Seq: 2, Type: protocol.TypePing, Args: []string{"2000", "0"}})
+	waitUntil(t, "the second ping", func() bool { return f.link.Status().MessagesRx >= 2 })
+	if got := f.link.Status().Firmware; got != "abc1234" {
+		t.Errorf("a PING without a version overwrote it: %q", got)
+	}
+}
+
+func TestPauseReleasesThePortUntilResumed(t *testing.T) {
+	// dfu-util needs the Nano to itself while it flashes. A link that kept
+	// reconnecting would fight it for the port and log a failure per attempt.
+	cfg := DefaultConfig()
+	cfg.ReconnectMin = time.Millisecond
+	cfg.ReconnectMax = 2 * time.Millisecond
+	f, nanos := newLinkFixture(t, cfg, 2)
+	nano := newNanoSide(t, nanos[0])
+	waitUntil(t, "the port to open", f.link.Connected)
+	nano.send(protocol.Message{Seq: 1, Type: protocol.TypePing, Args: []string{"1000", "0", "old1234"}})
+	waitUntil(t, "liveness", f.link.Live)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := f.link.Pause(ctx); err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+	if f.link.Connected() {
+		t.Fatal("Pause returned with the port still open")
+	}
+	st := f.link.Status()
+	if !st.Paused {
+		t.Error("a paused link does not say so")
+	}
+	if st.LastError != "" {
+		t.Errorf("releasing the port on purpose was recorded as an error: %q", st.LastError)
+	}
+
+	// A second transport is waiting. Time passing must not make the link take it.
+	for range 20 {
+		f.clock.Advance(time.Minute)
+		time.Sleep(time.Millisecond)
+	}
+	if n := f.opener.Opens(); n != 1 {
+		t.Fatalf("a paused link reopened the port: %d opens", n)
+	}
+
+	f.link.Resume()
+	waitUntil(t, "reconnection after resume", f.link.Connected)
+	st = f.link.Status()
+	if st.Paused {
+		t.Error("a resumed link still says it is paused")
+	}
+	// The reflashed Nano reports its own version; until it does, the old one
+	// must not stand in for it, or an update that failed would look applied.
+	if st.Firmware != "" {
+		t.Errorf("the previous session's version survived a reconnect: %q", st.Firmware)
+	}
+}

@@ -198,6 +198,9 @@ func (a *App) Health() state.Health {
 	// behind a status page that was green except for a blink every 8 seconds.
 	if hw.Live {
 		components["nano"] = state.StatusOK
+	} else if a.firmwareUpdating() {
+		// Off the link on purpose, and back in a few seconds.
+		components["nano"] = state.StatusDegraded
 	} else {
 		components["nano"] = state.StatusDown
 	}

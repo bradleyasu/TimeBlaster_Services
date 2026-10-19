@@ -32,6 +32,8 @@ type Server struct {
 	clock  system.Clock
 	log    *slog.Logger
 	portal *Portal
+	// flasher is set once, before Listen, by EnableFirmwareFlashing.
+	flasher *firmwareFlasher
 
 	mu sync.Mutex
 	// mode is the current networking mode.
@@ -198,6 +200,12 @@ func (s *Server) handle(ctx context.Context, req Request) Response {
 
 	case OpPowerOff:
 		if err := s.PowerOff(ctx); err != nil {
+			return errorResponse(err)
+		}
+		return Response{OK: true}
+
+	case OpFlashNano:
+		if err := s.FlashNano(ctx); err != nil {
 			return errorResponse(err)
 		}
 		return Response{OK: true}
@@ -573,6 +581,11 @@ func (s *Server) maxOperationTime() time.Duration {
 	d := s.cfg.ConnectTimeout.Duration + s.cfg.ValidateTimeout.Duration + 30*time.Second
 	if scan := s.cfg.ScanTimeout.Duration + 10*time.Second; scan > d {
 		d = scan
+	}
+	if s.flasher != nil {
+		if flash := s.flasher.cfg.FlashTimeout.Duration + 10*time.Second; flash > d {
+			d = flash
+		}
 	}
 	return d
 }

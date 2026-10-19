@@ -102,6 +102,39 @@ type SettingsService interface {
 	UpdateSettings(ctx context.Context, s Settings) (Settings, error)
 }
 
+// FirmwareStatus describes the Nano's firmware and the image the Pi holds.
+type FirmwareStatus struct {
+	// Running is the version the Nano reports; empty when it has not said,
+	// which includes all firmware from before versions were reported.
+	Running string `json:"running"`
+	// Available is the version of the image shipped with this Timeblaster;
+	// empty when there is none.
+	Available string `json:"available"`
+	// UpdateAvailable is what enables the update button: an image, a Nano
+	// that is talking, and the two differ.
+	UpdateAvailable bool `json:"update_available"`
+	Updating        bool `json:"updating"`
+	// LastResult is "updated" or "failed" after an update this run, and
+	// LastError says why a failed one failed.
+	LastResult   string    `json:"last_result,omitempty"`
+	LastError    string    `json:"last_error,omitempty"`
+	LastFinished time.Time `json:"last_finished,omitzero"`
+}
+
+// FirmwareService flashes the Nano on request. Never automatically: the only
+// caller is the update button.
+type FirmwareService interface {
+	FirmwareStatus() FirmwareStatus
+	// UpdateFirmware starts an update and returns at once; progress arrives as
+	// firmware_changed events. A refusal wraps ErrFirmwareRefused.
+	UpdateFirmware() error
+}
+
+// ErrFirmwareRefused means an update was not started, for a reason the user
+// can see and wait out: one is already running, an alarm is ringing, or there
+// is nothing to update to.
+var ErrFirmwareRefused = errors.New("firmware update refused")
+
 // SnapshotService builds the full state document.
 type SnapshotService interface {
 	Snapshot() state.Snapshot
@@ -119,6 +152,8 @@ type Deps struct {
 	WiFi      wifi.Manager
 	Settings  SettingsService
 	Snapshots SnapshotService
+	// Firmware may be nil, which reports no update ever available.
+	Firmware FirmwareService
 	// WebSocket is the hub handler, mounted at /api/ws.
 	WebSocket http.Handler
 	Logger    *slog.Logger
@@ -197,6 +232,10 @@ func (s *Server) routes() (http.Handler, error) {
 	// Settings.
 	mux.HandleFunc("GET /api/settings", s.handleGetSettings)
 	mux.HandleFunc("PUT /api/settings", s.handleUpdateSettings)
+
+	// The Nano's firmware. Updating is only ever started from here.
+	mux.HandleFunc("GET /api/firmware", s.handleGetFirmware)
+	mux.HandleFunc("POST /api/firmware/update", s.handleUpdateFirmware)
 
 	// Networking. These proxy to the privileged helper; the daemon itself can do
 	// none of it.

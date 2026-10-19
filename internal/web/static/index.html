@@ -167,6 +167,13 @@
       for five seconds. Starting setup from here disconnects this page.
     </p>
 
+    <h2>CONTROLLER FIRMWARE</h2>
+    <div class="kv" id="firmware-status"></div>
+    <!-- Disabled until the Timeblaster holds firmware newer than the Nano is
+         running. Nothing else ever starts an update. -->
+    <button class="btn wide ghost" id="btn-update-firmware" disabled>UPDATE FIRMWARE</button>
+    <p class="hint" id="firmware-hint"></p>
+
     <h2>APP</h2>
     <div class="kv" id="app-version"></div>
     <button class="btn wide ghost" id="btn-refresh-app">REFRESH APP</button>

@@ -166,6 +166,12 @@ func TestValidateFieldRanges(t *testing.T) {
 		{"overlay bad colour", func(c *Config) { c.Overlay.Color = "green" }, "color"},
 		{"overlay bad position", func(c *Config) { c.Overlay.Position = "middle-ish" }, "position"},
 		{"ssid too long", func(c *Config) { c.WiFi.SetupSSID = strings.Repeat("x", 33) }, "setup_ssid"},
+		// usb_id reaches dfu-util as an argument, run as root.
+		{"usb id that is an option", func(c *Config) { c.Firmware.USBID = "-R" }, "usb_id"},
+		{"usb id with extra words", func(c *Config) { c.Firmware.USBID = "2341:0070 -D /etc/shadow" }, "usb_id"},
+		{"relative firmware image", func(c *Config) { c.Firmware.Image = "nano.bin" }, "firmware.image"},
+		{"relative version file", func(c *Config) { c.Firmware.VersionFile = "v" }, "version_file"},
+		{"no flash timeout", func(c *Config) { c.Firmware.FlashTimeout = Dur(0) }, "flash_timeout"},
 		// Inverted disk thresholds would mean the warning only ever appears
 		// after the fault it was meant to precede.
 		{"disk thresholds inverted", func(c *Config) { c.Storage.DiskDownBelowMB = 99999 }, "disk_down_below_mb"},

@@ -273,6 +273,34 @@ Most builds need no calibration. If a knob cannot reach one extreme:
 
 ## Flashing the firmware
 
+### From the companion app
+
+The Timeblaster ships with its own firmware image and can flash the Nano itself
+over USB. When that image is newer than what the Nano reports, **System →
+Controller firmware → UPDATE FIRMWARE** is enabled; otherwise it is greyed out.
+It never updates on its own -- only the button starts one. The update is
+refused while an alarm is ringing.
+
+An update takes about half a minute. The daemon releases the serial port, the
+root helper runs `dfu-util -d 2341:0070 -R -D <image>`, the Nano restarts into
+the new firmware, and the update only counts as done once the Nano reports the
+new version over the link.
+
+To release new firmware: commit the firmware change, then
+
+```bash
+make firmware-release   # builds the image, stamped with that commit
+git add deploy/firmware && git commit
+make deploy             # the button lights up once it is on the Pi
+```
+
+The version is the last commit to touch `src/`, `platformio.ini` or
+`version.py`, so changes elsewhere in the repository never look like a firmware
+update. A test fails if firmware source is committed without a matching
+release.
+
+### By hand
+
 The firmware is a PlatformIO project, matching the toolchain the display driver
 was developed and proven with:
 

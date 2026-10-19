@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -61,6 +62,7 @@ type Config struct {
 	Overlay  Overlay  `toml:"overlay"`
 	Web      Web      `toml:"web"`
 	WiFi     WiFi     `toml:"wifi"`
+	Firmware Firmware `toml:"firmware"`
 }
 
 // General holds device-wide settings.
@@ -650,7 +652,36 @@ func Default() Config {
 			ValidateTimeout: Dur(30 * time.Second),
 			ScanTimeout:     Dur(20 * time.Second),
 		},
+		Firmware: Firmware{
+			Image:        "/usr/local/share/timeblaster/firmware/nano-firmware.bin",
+			VersionFile:  "/usr/local/share/timeblaster/firmware/nano-firmware.version",
+			DFUUtil:      "dfu-util",
+			USBID:        "2341:0070",
+			FlashTimeout: Dur(2 * time.Minute),
+		},
 	}
+}
+
+// Firmware describes the Nano firmware image the Pi can flash on request.
+//
+// The image ships with the Timeblaster rather than being fetched: it is built
+// from the same commit as everything else, so the Pi only ever offers the
+// firmware its own daemon was written against. Flashing is never automatic --
+// the companion app's System tab has a button, and that is the only way in.
+type Firmware struct {
+	// Image is the application image dfu-util writes. Read by the root helper,
+	// so it lives somewhere only root can change.
+	Image string `toml:"image"`
+	// VersionFile holds the version compiled into Image, which the daemon
+	// compares with what the Nano reports.
+	VersionFile string `toml:"version_file"`
+	// DFUUtil is the flashing program.
+	DFUUtil string `toml:"dfu_util"`
+	// USBID is the Nano's vendor:product, which keeps dfu-util from writing to
+	// any other DFU-capable device that happens to be plugged in.
+	USBID string `toml:"usb_id"`
+	// FlashTimeout bounds one flash, which normally takes well under a minute.
+	FlashTimeout Duration `toml:"flash_timeout"`
 }
 
 // Load reads a configuration file, layering it over the defaults.
@@ -899,8 +930,29 @@ func (c Config) Validate() error {
 		add("wifi.connect_timeout must be positive")
 	}
 
+	// firmware
+	if !filepath.IsAbs(c.Firmware.Image) {
+		add("firmware.image must be an absolute path, got %q", c.Firmware.Image)
+	}
+	if !filepath.IsAbs(c.Firmware.VersionFile) {
+		add("firmware.version_file must be an absolute path, got %q", c.Firmware.VersionFile)
+	}
+	if c.Firmware.DFUUtil == "" {
+		add("firmware.dfu_util must not be empty")
+	}
+	// Passed to dfu-util as -d, so it must be exactly an ID and never anything
+	// that dfu-util could read as another option.
+	if !usbIDPattern.MatchString(c.Firmware.USBID) {
+		add("firmware.usb_id must look like 2341:0070, got %q", c.Firmware.USBID)
+	}
+	if c.Firmware.FlashTimeout.Duration <= 0 {
+		add("firmware.flash_timeout must be positive")
+	}
+
 	return errors.Join(errs...)
 }
+
+var usbIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{4}:[0-9a-fA-F]{4}$`)
 
 // SoundPath resolves a sound identifier to a path inside the alarm sounds
 // directory, rejecting anything that would escape it. Sound ids come from the

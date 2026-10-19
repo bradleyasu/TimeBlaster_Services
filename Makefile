@@ -99,6 +99,25 @@ firmware-test: ## Run the Arduino firmware's host tests (no board required)
 	@$(MAKE) --no-print-directory -C firmware/timeblaster-nano test
 
 .PHONY: firmware-fixture
+FIRMWARE_DIR := firmware/timeblaster-nano
+FIRMWARE_SRC := src platformio.ini version.py
+PIO ?= $(shell command -v pio 2>/dev/null || echo $$HOME/.platformio/penv/bin/pio)
+
+.PHONY: firmware-release
+firmware-release: ## Build the Nano image the Pi offers as an update (commit the firmware first)
+# The version is the last commit to touch the firmware's source, so an image
+# built from uncommitted source would carry a version that names the wrong
+# code. Refuse rather than ship it.
+	@if [ -n "$$(git status --porcelain -- $(addprefix $(FIRMWARE_DIR)/,$(FIRMWARE_SRC)))" ]; then \
+		printf '\nRefusing: the firmware source has uncommitted changes.\n\n'; \
+		git status --short -- $(addprefix $(FIRMWARE_DIR)/,$(FIRMWARE_SRC)); \
+		printf '\nCommit them first; the image is versioned by that commit.\n\n'; exit 1; fi
+	cd $(FIRMWARE_DIR) && $(PIO) run
+	@mkdir -p deploy/firmware
+	cp $(FIRMWARE_DIR)/.pio/build/arduino_nano_esp32/firmware.bin deploy/firmware/nano-firmware.bin
+	cp $(FIRMWARE_DIR)/.pio/build/arduino_nano_esp32/firmware.version deploy/firmware/nano-firmware.version
+	@printf '\nReleased firmware %s. Commit deploy/firmware/, then deploy.\n' "$$(cat deploy/firmware/nano-firmware.version)"
+
 firmware-fixture: ## Regenerate the protocol fixture from the firmware encoder
 	@$(MAKE) --no-print-directory -C firmware/timeblaster-nano fixture
 
@@ -190,9 +209,11 @@ install: ## Install on THIS machine (run on the Pi, as root)
 .PHONY: deploy
 deploy: verify-synced build-pi ## Cross-compile and copy the binaries to the Pi over SSH
 	@printf 'Deploying $(VERSION) to $(PI_SSH)\n'
-	scp $(SSH_OPTS) $(BIN_DIR)/$(PI_GOOS)-$(PI_GOARCH)/* $(PI_SSH):/tmp/
+	scp $(SSH_OPTS) $(BIN_DIR)/$(PI_GOOS)-$(PI_GOARCH)/* deploy/firmware/nano-firmware.* $(PI_SSH):/tmp/
 	ssh -t $(SSH_OPTS) $(PI_SSH) 'sudo install -m 0755 /tmp/timeblasterd /tmp/timeblaster-wifi /tmp/tbctl /usr/local/bin/ && \
-	           rm -f /tmp/timeblasterd /tmp/timeblaster-wifi /tmp/tbctl && \
+	           sudo install -d -m 0755 /usr/local/share/timeblaster/firmware && \
+	           sudo install -m 0644 /tmp/nano-firmware.bin /tmp/nano-firmware.version /usr/local/share/timeblaster/firmware/ && \
+	           rm -f /tmp/timeblasterd /tmp/timeblaster-wifi /tmp/tbctl /tmp/nano-firmware.bin /tmp/nano-firmware.version && \
 	           sudo systemctl restart timeblaster-wifi.service timeblaster.service'
 	@printf 'Deployed. Check with: make logs\n'
 
@@ -221,6 +242,8 @@ update: ## Pull and deploy on THIS machine (run on the Pi)
 	git pull --ff-only
 	@$(MAKE) --no-print-directory build
 	sudo install -m 0755 $(BIN_DIR)/timeblasterd $(BIN_DIR)/timeblaster-wifi $(BIN_DIR)/tbctl /usr/local/bin/
+	sudo install -d -m 0755 /usr/local/share/timeblaster/firmware
+	sudo install -m 0644 deploy/firmware/nano-firmware.bin deploy/firmware/nano-firmware.version /usr/local/share/timeblaster/firmware/
 	sudo systemctl restart timeblaster-wifi.service timeblaster.service
 	@sleep 4
 	@printf '\nNow running %s\n' "$$(tbctl version 2>/dev/null || echo '?')"

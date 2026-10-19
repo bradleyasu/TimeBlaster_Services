@@ -62,14 +62,18 @@ type App struct {
 	router    *input.Router
 	link      *hardware.Link
 	nano      hardware.Nano
-	tvPlayer  mpv.Controller
-	tvSuper   *mpv.Supervisor
-	overlay   *mpv.OverlayRenderer
-	media     *media.Service
-	wifi      wifi.Manager
-	hub       *wsocket.Hub
-	web       *web.Server
-	sup       *supervisor
+	// fwPort is the link as a firmware update sees it; nil without a real
+	// link, which leaves the update button permanently disabled.
+	fwPort   firmwarePort
+	fw       firmwareUpdater
+	tvPlayer mpv.Controller
+	tvSuper  *mpv.Supervisor
+	overlay  *mpv.OverlayRenderer
+	media    *media.Service
+	wifi     wifi.Manager
+	hub      *wsocket.Hub
+	web      *web.Server
+	sup      *supervisor
 
 	// ownsStore records whether we opened the database and must close it.
 	ownsStore bool
@@ -432,6 +436,7 @@ func (a *App) initHardware(deps Deps) {
 		Observer: a.router, Lifecycle: a, Shutdown: a, ClockSync: clockSync,
 	})
 	a.nano = a.link
+	a.fwPort = a.link
 }
 
 func (a *App) initMedia(deps Deps) error {
@@ -506,7 +511,7 @@ func (a *App) initWeb() error {
 	srv, err := web.NewServer(a.cfg.Web, web.Deps{
 		Config: a.cfg, Alarms: a.scheduler, Audio: a.audio, Media: mediaSvc,
 		Hardware: a.hardwareStatus(), Inputs: a.router, WiFi: a.wifi,
-		Settings: a, Snapshots: a, WebSocket: http.Handler(a.hub),
+		Settings: a, Snapshots: a, Firmware: a, WebSocket: http.Handler(a.hub),
 		Logger: a.log.With("component", "web"), Version: a.version,
 	})
 	if err != nil {

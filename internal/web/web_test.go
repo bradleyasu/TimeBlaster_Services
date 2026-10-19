@@ -333,6 +333,7 @@ type fixture struct {
 	media    *fakeMedia
 	wifi     *wifi.FakeManager
 	settings *fakeSettings
+	firmware *fakeFirmware
 }
 
 func newFixture(t *testing.T, seed ...alarm.Alarm) *fixture {
@@ -351,12 +352,13 @@ func newFixture(t *testing.T, seed ...alarm.Alarm) *fixture {
 		}},
 		wifi:     wifi.NewFakeManager(),
 		settings: &fakeSettings{settings: Settings{Timezone: "UTC", DisplayOn: true, DefaultSoundID: "alarm1"}},
+		firmware: &fakeFirmware{status: FirmwareStatus{Running: "0123abc", Available: "abc1234", UpdateAvailable: true}},
 	}
 
 	srv, err := NewServer(cfg.Web, Deps{
 		Config: cfg, Alarms: f.alarms, Audio: f.audio, Media: f.media,
 		Hardware: &fakeHardware{connected: true}, Inputs: fakeInputs{},
-		WiFi: f.wifi, Settings: f.settings, Snapshots: &fakeSnapshots{},
+		WiFi: f.wifi, Settings: f.settings, Snapshots: &fakeSnapshots{}, Firmware: f.firmware,
 		Logger: testLogger(), Version: "test",
 	})
 	if err != nil {

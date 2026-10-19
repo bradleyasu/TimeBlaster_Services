@@ -61,7 +61,7 @@ contain anything:
 | Type | Args | Meaning |
 | --- | --- | --- |
 | `HELLO` | firmware version, hardware id | Sent on boot or reset. The Pi answers with a full resync. |
-| `PING` | uptime ms [, dropped frames] | Liveness beacon, every 2 s. Newer firmware adds how many frames it has had to discard because its USB transmit buffer was full; the Pi reports growth in that count, not its starting value. |
+| `PING` | uptime ms [, dropped frames [, firmware version]] | Liveness beacon, every 2 s. Newer firmware adds how many frames it has had to discard because its USB transmit buffer was full; the Pi reports growth in that count, not its starting value. It also adds its version, which `HELLO` carries too but which the Pi usually misses: `HELLO` goes out once at boot, often before the port is open. The Pi compares it with the image it ships to decide whether to offer a firmware update. |
 | `POT` | index, raw value | A filtered potentiometer reading, `0`–`4095`. |
 | `BUTTON` | name, `DOWN`\|`UP` | A debounced button edge. Names: `WIFI`, `ALARM_OFF`. |
 | `LOG` | level, text | A firmware diagnostic; surfaced at debug level on the Pi. |

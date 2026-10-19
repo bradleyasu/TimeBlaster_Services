@@ -53,6 +53,9 @@ const (
 	EventWiFiChanged EventType = "wifi_changed"
 	// EventSettingsChanged reports a settings update.
 	EventSettingsChanged EventType = "settings_changed"
+	// EventFirmwareChanged carries the Nano firmware status: an update
+	// starting, finishing, or failing.
+	EventFirmwareChanged EventType = "firmware_changed"
 )
 
 // Event is one broadcast message.
