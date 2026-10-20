@@ -64,6 +64,7 @@ func (a *App) Snapshot() state.Snapshot {
 		snap.Channels = []ersatztv.Channel{}
 	}
 
+	snap.Screen = a.screenState()
 	snap.WiFi = a.wifiStatus()
 	return snap
 }
@@ -81,7 +82,8 @@ func (a *App) inputSnapshot() state.Inputs {
 	return state.Inputs{
 		ChannelKnob:   pos(input.PotChannel),
 		VolumeKnob:    pos(input.PotAlarmVolume),
-		ReservedKnobs: []float64{pos(input.PotReservedA), pos(input.PotReservedB)},
+		ModeKnob:      pos(input.PotMode),
+		ReservedKnobs: []float64{pos(input.PotReservedB)},
 	}
 }
 

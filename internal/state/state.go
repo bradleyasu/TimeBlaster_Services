@@ -14,10 +14,12 @@ import (
 	"time"
 
 	"github.com/bradsheets/timeblaster/internal/alarm"
+	"github.com/bradsheets/timeblaster/internal/ambience"
 	"github.com/bradsheets/timeblaster/internal/audio"
 	"github.com/bradsheets/timeblaster/internal/ersatztv"
 	"github.com/bradsheets/timeblaster/internal/hardware"
 	"github.com/bradsheets/timeblaster/internal/media"
+	"github.com/bradsheets/timeblaster/internal/screen"
 	"github.com/bradsheets/timeblaster/internal/wifi"
 )
 
@@ -53,6 +55,9 @@ const (
 	EventWiFiChanged EventType = "wifi_changed"
 	// EventSettingsChanged reports a settings update.
 	EventSettingsChanged EventType = "settings_changed"
+	// EventScreenChanged reports the television's mode changing, or the
+	// ambience mode's channels or selection.
+	EventScreenChanged EventType = "screen_changed"
 	// EventFirmwareChanged carries the Nano firmware status: an update
 	// starting, finishing, or failing.
 	EventFirmwareChanged EventType = "firmware_changed"
@@ -122,6 +127,28 @@ type Snapshot struct {
 	// Inputs reports the live position of the physical controls, which makes the
 	// companion app useful for diagnosing a knob without a screwdriver.
 	Inputs Inputs `json:"inputs"`
+	// Screen is the television's mode and what it is showing.
+	Screen Screen `json:"screen"`
+}
+
+// Screen describes the television's mode.
+type Screen struct {
+	// Mode is the active mode's ID, Title its name.
+	Mode    string         `json:"mode"`
+	Title   string         `json:"title"`
+	Showing screen.Showing `json:"showing"`
+	// Modes are every mode, in mode-knob order.
+	Modes []ScreenMode `json:"modes"`
+	// AmbienceChannels are the ambience mode's channel folders.
+	AmbienceChannels []ambience.Channel `json:"ambience_channels"`
+	// AmbienceDir is where ambience videos go, for telling people so.
+	AmbienceDir string `json:"ambience_dir"`
+}
+
+// ScreenMode names one mode.
+type ScreenMode struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
 }
 
 // Inputs describes the physical controls' current positions.
@@ -130,8 +157,10 @@ type Inputs struct {
 	ChannelKnob float64 `json:"channel_knob"`
 	// VolumeKnob is 0.0-1.0, or -1 when it has never reported.
 	VolumeKnob float64 `json:"volume_knob"`
-	// ReservedKnobs are pots 2 and 3, currently unassigned.
-	// TODO: name these once pots 2 and 3 have functions.
+	// ModeKnob is 0.0-1.0, or -1 when it has never reported.
+	ModeKnob float64 `json:"mode_knob"`
+	// ReservedKnobs is pot 3, currently unassigned.
+	// TODO: name it once pot 3 has a function.
 	ReservedKnobs []float64 `json:"reserved_knobs"`
 }
 

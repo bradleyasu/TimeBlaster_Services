@@ -66,14 +66,39 @@ All four are wired identically:
 
 | Pot | Pin | Function |
 | --- | --- | --- |
-| 0 | `A0` | **TV channel.** Absolute position: the travel is divided into as many bands as there are channels. |
+| 0 | `A0` | **Channel.** Absolute position: the travel is divided into as many bands as the current mode has channels -- ErsatzTV channels in TV mode, ambience folders in ambience mode. |
 | 1 | `A1` | **Alarm speaker volume.** The knob is authoritative; software never overrides it for long. |
-| 2 | `A2` | Reserved. **TODO:** unassigned. |
+| 2 | `A2` | **Mode.** Divided between the modes in `input.mode_knob`, by default TV (anticlockwise half) and ambience (clockwise half). |
 | 3 | `A3` | Reserved. **TODO:** unassigned. |
 
-Pots 2 and 3 are already filtered, calibrated and delivered to the application as
-typed events; assigning one is a matter of adding a case in
+Pot 3 is already filtered, calibrated and delivered to the application as a
+typed event; assigning it is a matter of adding a case in
 [`internal/app/router.go`](../internal/app/router.go).
+
+### Television modes
+
+The mode knob chooses what the television is doing; the channel knob chooses
+within it. Turning the mode knob re-divides the channel knob for the new mode and
+shows whichever channel it now points at.
+
+* **TV** -- ErsatzTV channels, as before. The display shows `Ch.02`.
+* **Ambience** -- looping local videos. Each channel is a numbered folder under
+  `/srv/timeblaster/ambient` (`ambience.dir`):
+
+  ```text
+  /srv/timeblaster/ambient/ch1/fireplace.mp4         one video: loops seamlessly
+  /srv/timeblaster/ambient/ch2-rain/1.mp4, 2.mp4 ...  several: in order, then repeat
+  ```
+
+  Videos play in natural order (`2.mp4` before `10.mp4`). The optional name
+  after the number (`ch2-rain`) appears in the on-screen banner. The folder is
+  owned by the account that ran `setup.sh`, so `scp` straight into it; new
+  folders and videos are picked up within 30 seconds. The display shows `Am.02`.
+
+Adding a mode means implementing `screen.Mode`
+([`internal/screen`](../internal/screen/mode.go)), building it in
+[`internal/app/screen.go`](../internal/app/screen.go), and listing its ID in
+`config.ScreenModes` and `input.mode_knob`.
 
 **Wiring notes**
 

@@ -166,6 +166,13 @@ func TestValidateFieldRanges(t *testing.T) {
 		{"overlay bad colour", func(c *Config) { c.Overlay.Color = "green" }, "color"},
 		{"overlay bad position", func(c *Config) { c.Overlay.Position = "middle-ish" }, "position"},
 		{"ssid too long", func(c *Config) { c.WiFi.SetupSSID = strings.Repeat("x", 33) }, "setup_ssid"},
+		{"no modes", func(c *Config) { c.Input.ModeKnob = nil }, "mode_knob"},
+		{"unknown mode", func(c *Config) { c.Input.ModeKnob = []string{"tv", "guide"} }, "mode_knob"},
+		// Two bands of the knob leading to the same mode would be a dead zone
+		// that looks like a broken knob.
+		{"duplicate mode", func(c *Config) { c.Input.ModeKnob = []string{"tv", "ambience", "tv"} }, "twice"},
+		{"relative ambience dir", func(c *Config) { c.Ambience.Dir = "ambient" }, "ambience.dir"},
+		{"no ambience rescan", func(c *Config) { c.Ambience.RescanInterval = Dur(0) }, "rescan_interval"},
 		// usb_id reaches dfu-util as an argument, run as root.
 		{"usb id that is an option", func(c *Config) { c.Firmware.USBID = "-R" }, "usb_id"},
 		{"usb id with extra words", func(c *Config) { c.Firmware.USBID = "2341:0070 -D /etc/shadow" }, "usb_id"},

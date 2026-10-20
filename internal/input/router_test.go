@@ -19,6 +19,7 @@ type recordingHandler struct {
 	volumes  []VolumeChange
 	buttons  []ButtonEvent
 	reserved []ReservedPotChange
+	modes    []ModeSelect
 	notify   chan struct{}
 }
 
@@ -43,6 +44,17 @@ func (r *recordingHandler) OnButton(e ButtonEvent) {
 	r.buttons = append(r.buttons, e)
 	r.mu.Unlock()
 	r.ping()
+}
+func (r *recordingHandler) OnModeSelect(e ModeSelect) {
+	r.mu.Lock()
+	r.modes = append(r.modes, e)
+	r.mu.Unlock()
+	r.ping()
+}
+func (r *recordingHandler) modeEvents() []ModeSelect {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]ModeSelect(nil), r.modes...)
 }
 func (r *recordingHandler) OnReservedPot(e ReservedPotChange) {
 	r.mu.Lock()
@@ -137,22 +149,87 @@ func TestRouterVolumeKnobIsPhysical(t *testing.T) {
 	}
 }
 
-func TestRouterReservedPotsAreSurfacedNotActedOn(t *testing.T) {
+func TestRouterReservedPotIsSurfacedNotActedOn(t *testing.T) {
 	r, h, _ := newTestRouter(t)
 	r.SetChannelCount(4)
 
-	r.PotReport(PotReservedA, 1000)
 	r.PotReport(PotReservedB, 3000)
 
 	chs, vols, _, reserved := h.snapshot()
-	if len(chs) != 0 || len(vols) != 0 {
-		t.Errorf("reserved pots must not drive channel or volume: %+v %+v", chs, vols)
+	if len(chs) != 0 || len(vols) != 0 || len(h.modeEvents()) != 0 {
+		t.Errorf("the reserved pot must not drive anything: %+v %+v %+v", chs, vols, h.modeEvents())
 	}
-	if len(reserved) != 2 {
+	if len(reserved) != 1 || reserved[0].Index != PotReservedB {
 		t.Fatalf("reserved events: %+v", reserved)
 	}
-	if reserved[0].Index != PotReservedA || reserved[1].Index != PotReservedB {
-		t.Errorf("indices: %+v", reserved)
+}
+
+func newModeRouter(t *testing.T, modes int, fitted bool) (*Router, *recordingHandler) {
+	t.Helper()
+	cfg := DefaultConfig()
+	cfg.ModeCount, cfg.ModePotFitted = modes, fitted
+	h := newRecordingHandler()
+	return NewRouter(cfg, system.NewFakeClock(t0), slog.New(slog.NewTextHandler(io.Discard, nil)), h), h
+}
+
+// modeAt reports pot 2 enough times for the filter to settle at raw.
+func modeAt(r *Router, raw int) {
+	for range 30 {
+		r.PotReport(PotMode, raw)
+	}
+}
+
+func TestModeKnobSelectsModes(t *testing.T) {
+	r, h := newModeRouter(t, 2, true)
+	modeAt(r, 200) // near the start: the first mode
+	modeAt(r, 3900)
+	modeAt(r, 200)
+
+	var bands []int
+	for _, e := range h.modeEvents() {
+		bands = append(bands, e.Band)
+	}
+	if len(bands) != 3 || bands[0] != 0 || bands[1] != 1 || bands[2] != 0 {
+		t.Errorf("bands %v, want [0 1 0]", bands)
+	}
+	chs, _, _, reserved := h.snapshot()
+	if len(chs) != 0 || len(reserved) != 0 {
+		t.Errorf("the mode knob drove something else: %+v %+v", chs, reserved)
+	}
+}
+
+func TestModeKnobHasHysteresis(t *testing.T) {
+	// A knob resting just past the middle must not flick between modes.
+	r, h := newModeRouter(t, 2, true)
+	modeAt(r, 1950) // just below halfway
+	modeAt(r, 2150) // just above: not far enough past the boundary
+	if n := len(h.modeEvents()); n != 1 {
+		t.Errorf("%d mode events for a knob hovering at the boundary, want 1", n)
+	}
+}
+
+func TestAnUnfittedModeKnobNeverChangesMode(t *testing.T) {
+	r, h := newModeRouter(t, 2, false)
+	modeAt(r, 200)
+	modeAt(r, 3900)
+	if n := len(h.modeEvents()); n != 0 {
+		t.Errorf("an unfitted knob produced %d mode events", n)
+	}
+	// Still visible for diagnosing it.
+	if _, primed := r.Position(PotMode); !primed {
+		t.Error("an unfitted knob's position is not reported")
+	}
+}
+
+func TestResetMakesTheModeKnobReportAgain(t *testing.T) {
+	// After a reconnect the knob may have been turned; its next report must
+	// be acted on even if it lands in the same band.
+	r, h := newModeRouter(t, 2, true)
+	modeAt(r, 3900)
+	r.Reset()
+	modeAt(r, 3900)
+	if n := len(h.modeEvents()); n != 2 {
+		t.Errorf("%d mode events across a reset, want 2", n)
 	}
 }
 

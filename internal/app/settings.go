@@ -218,8 +218,8 @@ func (a *App) UpdateSettings(ctx context.Context, s web.Settings) (web.Settings,
 		// Reload whatever is on screen so the new device is actually used. See
 		// applyTVAudioOutput: a stream that is already playing keeps its dead
 		// audio output until the file is loaded again.
-		if a.media != nil {
-			a.media.RestorePlayback(ctx)
+		if a.screen != nil {
+			a.screen.RestorePlayback()
 		}
 		a.log.Info("television audio output changed", "output", s.TVAudioOutput)
 	}

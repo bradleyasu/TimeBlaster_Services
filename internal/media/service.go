@@ -19,6 +19,7 @@ import (
 	"github.com/bradsheets/timeblaster/internal/config"
 	"github.com/bradsheets/timeblaster/internal/ersatztv"
 	"github.com/bradsheets/timeblaster/internal/mpv"
+	"github.com/bradsheets/timeblaster/internal/screen"
 	"github.com/bradsheets/timeblaster/internal/system"
 )
 
@@ -95,6 +96,10 @@ type Service struct {
 	overlay *mpv.OverlayRenderer
 	clock   system.Clock
 	log     *slog.Logger
+
+	// gate admits player work only while this is the active television mode.
+	// Every load, and the bookkeeping that records it, happens inside it.
+	gate screen.Gate
 
 	mu       sync.RWMutex
 	observer Observer
@@ -181,7 +186,7 @@ func NewService(etvCfg config.ErsatzTV, mpvCfg config.MPV, d Deps) *Service {
 	if timeout <= 0 {
 		timeout = 90 * time.Second
 	}
-	return &Service{
+	s := &Service{
 		etvCfg:       etvCfg,
 		mpvCfg:       mpvCfg,
 		etv:          d.ErsatzTV,
@@ -193,6 +198,56 @@ func NewService(etvCfg config.ErsatzTV, mpvCfg config.MPV, d Deps) *Service {
 		bootDeadline: d.Clock.Now().Add(timeout),
 		refreshNow:   make(chan struct{}, 1),
 	}
+	// Active until told otherwise. On its own the service is the whole
+	// television; under a screen.Director, the director decides.
+	s.gate.Open()
+	return s
+}
+
+var _ screen.Mode = (*Service)(nil)
+
+// ID names this mode in configuration and the API.
+func (s *Service) ID() string { return "tv" }
+
+// Title names this mode for people.
+func (s *Service) Title() string { return "TV" }
+
+// Activate lets the service use the player again.
+func (s *Service) Activate() { s.gate.Open() }
+
+// Deactivate hands the player to another mode.
+//
+// The selection is forgotten rather than kept: whatever the other mode puts on
+// screen replaces this one's picture, so on the way back the channel has to be
+// loaded again, and a remembered selection would make SelectChannel decide it
+// was already playing.
+func (s *Service) Deactivate() {
+	s.gate.Close()
+	s.mu.Lock()
+	s.current = nil
+	s.shownImage = ""
+	s.reloadChannel, s.reloadFailures = "", 0
+	s.mu.Unlock()
+
+	// A tuning card still waiting for this mode's picture would otherwise keep
+	// animating over the next mode's until its safety-net hold ran out.
+	if s.overlay != nil && s.overlay.Awaiting() {
+		ctx, cancel := context.WithTimeout(context.Background(), s.mpvCfg.CommandTimeout.Duration)
+		if err := s.overlay.Hide(ctx); err != nil {
+			s.log.Debug("could not take down the channel card", "error", err)
+		}
+		cancel()
+	}
+}
+
+// Showing reports the selected channel.
+func (s *Service) Showing() screen.Showing {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.current == nil {
+		return screen.Showing{}
+	}
+	return screen.Showing{Number: s.current.Number, Name: s.current.Name}
 }
 
 // SetObserver installs the observer after construction.
@@ -297,7 +352,7 @@ func (s *Service) Refresh(ctx context.Context) error {
 	}
 	if dropped {
 		s.log.Info("the selected channel no longer exists; showing the no-channel image")
-		if err := s.ShowNoChannel(ctx); err != nil {
+		if err := s.ShowNoChannel(ctx); err != nil && !errors.Is(err, screen.ErrInactive) {
 			s.log.Warn("could not show the no-channel image", "error", err)
 		}
 	}
@@ -405,47 +460,60 @@ func (s *Service) SelectChannel(ctx context.Context, ch ersatztv.Channel) error 
 	}
 
 	url := s.etv.StreamURL(ch)
-	s.log.Info("channel change", "number", ch.Number, "name", ch.Name, "url", url)
 
-	// The overlay goes up before the load, not after it.
-	//
-	// ErsatzTV needs several seconds to cold-start a channel it is not already
-	// streaming, and mpv holds the outgoing channel's last frame until the new
-	// one decodes — so the wait looks like the picture has frozen. Drawing
-	// afterwards meant the card only landed on a screen that had already been
-	// sitting still for a while. Drawing first puts it up before the old
-	// picture stops moving.
-	//
-	// The overlay is cosmetic: a failure must not turn a successful channel
-	// change into an error.
-	if s.overlay != nil {
-		if err := s.overlay.ShowChannel(ctx, ch.Number, ch.Name); err != nil {
-			s.log.Debug("could not draw the channel overlay", "error", err)
-		}
-	}
+	err := s.gate.Do(func() error {
+		s.log.Info("channel change", "number", ch.Number, "name", ch.Name, "url", url)
 
-	if err := s.player.LoadFile(ctx, url); err != nil {
-		// The card promised a channel that is not coming. Take it down rather
-		// than leave it up until the safety-net hold expires.
+		// The overlay goes up before the load, not after it.
+		//
+		// ErsatzTV needs several seconds to cold-start a channel it is not
+		// already streaming, and mpv holds the outgoing channel's last frame
+		// until the new one decodes — so the wait looks like the picture has
+		// frozen. Drawing afterwards meant the card only landed on a screen
+		// that had already been sitting still for a while. Drawing first puts
+		// it up before the old picture stops moving.
+		//
+		// The overlay is cosmetic: a failure must not turn a successful
+		// channel change into an error.
 		if s.overlay != nil {
-			if herr := s.overlay.Hide(ctx); herr != nil {
-				s.log.Debug("could not hide the channel overlay", "error", herr)
+			if err := s.overlay.ShowChannel(ctx, ch.Number, ch.Name); err != nil {
+				s.log.Debug("could not draw the channel overlay", "error", err)
 			}
 		}
+
+		if err := s.player.LoadFile(ctx, url); err != nil {
+			// The card promised a channel that is not coming. Take it down
+			// rather than leave it up until the safety-net hold expires.
+			if s.overlay != nil {
+				if herr := s.overlay.Hide(ctx); herr != nil {
+					s.log.Debug("could not hide the channel overlay", "error", herr)
+				}
+			}
+			s.mu.Lock()
+			s.lastErr = err
+			s.mu.Unlock()
+			s.log.Error("could not start the channel stream",
+				"number", ch.Number, "url", url, "error", err)
+			return fmt.Errorf("media: loading channel %s: %w", ch.Number, err)
+		}
+
+		// Recorded inside the gate, so a mode switch cannot clear the
+		// selection between the load and this line and leave an inactive
+		// service believing it has a channel on screen.
 		s.mu.Lock()
-		s.lastErr = err
+		s.current = &ch
+		s.shownImage = ""
+		s.lastErr = nil
 		s.mu.Unlock()
-		s.log.Error("could not start the channel stream",
-			"number", ch.Number, "url", url, "error", err)
-		return fmt.Errorf("media: loading channel %s: %w", ch.Number, err)
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 
-	s.mu.Lock()
-	s.current = &ch
-	s.shownImage = ""
-	s.lastErr = nil
+	s.mu.RLock()
 	obs := s.observer
-	s.mu.Unlock()
+	s.mu.RUnlock()
 
 	if obs != nil {
 		cp := ch
@@ -473,35 +541,46 @@ func (s *Service) ShowNoChannel(ctx context.Context) error {
 		return nil
 	}
 
-	if image == "" {
-		s.log.Debug("no no-channel image is configured; stopping playback instead")
-		if _, err := s.player.Command(ctx, "stop"); err != nil {
-			return fmt.Errorf("media: stopping playback: %w", err)
+	var had bool
+	err := s.gate.Do(func() error {
+		if image == "" {
+			s.log.Debug("no no-channel image is configured; stopping playback instead")
+			if _, err := s.player.Command(ctx, "stop"); err != nil {
+				return fmt.Errorf("media: stopping playback: %w", err)
+			}
+		} else if err := s.player.LoadFile(ctx, image); err != nil {
+			s.mu.Lock()
+			s.lastErr = err
+			s.mu.Unlock()
+			if errors.Is(err, mpv.ErrNotConnected) {
+				// Normal at startup: the daemon puts something on screen as
+				// early as it can, which is usually a second or two before mpv
+				// has finished claiming the display. The supervisor restores
+				// playback the moment it connects, so this corrects itself.
+				// Logging it as an error would put a red line in every single
+				// boot and teach you to ignore them.
+				s.log.Debug("player not ready for the standby image yet; "+
+					"it will be restored when mpv connects", "image", image)
+			} else {
+				s.log.Error("could not display the no-channel image", "image", image, "error", err)
+			}
+			return fmt.Errorf("media: loading %s: %w", image, err)
 		}
-	} else if err := s.player.LoadFile(ctx, image); err != nil {
+
 		s.mu.Lock()
-		s.lastErr = err
+		had = s.current != nil
+		s.current = nil
+		s.shownImage = shown
 		s.mu.Unlock()
-		if errors.Is(err, mpv.ErrNotConnected) {
-			// Normal at startup: the daemon puts something on screen as early as
-			// it can, which is usually a second or two before mpv has finished
-			// claiming the display. The supervisor restores playback the moment
-			// it connects, so this corrects itself. Logging it as an error would
-			// put a red line in every single boot and teach you to ignore them.
-			s.log.Debug("player not ready for the standby image yet; "+
-				"it will be restored when mpv connects", "image", image)
-		} else {
-			s.log.Error("could not display the no-channel image", "image", image, "error", err)
-		}
-		return fmt.Errorf("media: loading %s: %w", image, err)
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 
-	s.mu.Lock()
-	had := s.current != nil
-	s.current = nil
-	s.shownImage = shown
+	s.mu.RLock()
 	obs := s.observer
-	s.mu.Unlock()
+	s.mu.RUnlock()
 
 	if had {
 		s.log.Info("no channel selected; showing the static image", "image", image)
@@ -537,6 +616,9 @@ func (s *Service) standbyImage() string {
 // the current channel (or the static image) back without the user noticing
 // anything beyond a brief gap.
 func (s *Service) RestorePlayback(ctx context.Context) {
+	if !s.gate.IsOpen() {
+		return // another mode owns the screen and restores its own picture
+	}
 	s.mu.Lock()
 	current := s.current
 	// Force a reload even though the selection has not changed.
@@ -566,6 +648,9 @@ func (s *Service) RestorePlayback(ctx context.Context) {
 // is almost always the right response, and falling back to the static image
 // after that fails keeps a console off the screen.
 func (s *Service) HandlePlayerEvent(ev mpv.Event) {
+	if !s.gate.IsOpen() {
+		return // the event is about another mode's picture
+	}
 	// The picture has arrived. This is what releases a channel banner that has
 	// been holding since the channel was requested.
 	if ev.Name == "playback-restart" {
@@ -611,7 +696,7 @@ func (s *Service) HandlePlayerEvent(ev mpv.Event) {
 			s.shownImage = ""
 			s.mu.Unlock()
 
-			if err := s.ShowNoChannel(ctx); err != nil {
+			if err := s.ShowNoChannel(ctx); err != nil && !errors.Is(err, screen.ErrInactive) {
 				s.log.Error("could not restore the standby image", "error", err)
 			}
 		}()
@@ -635,7 +720,7 @@ func (s *Service) HandlePlayerEvent(ev mpv.Event) {
 			s.shownImage = ""
 			s.mu.Unlock()
 
-			if err := s.ShowNoChannel(ctx); err != nil {
+			if err := s.ShowNoChannel(ctx); err != nil && !errors.Is(err, screen.ErrInactive) {
 				s.log.Error("could not show the no-channel image", "error", err)
 			}
 		}()
@@ -663,9 +748,12 @@ func (s *Service) HandlePlayerEvent(ev mpv.Event) {
 		s.mu.Unlock()
 
 		if err := s.SelectChannel(ctx, ch); err != nil {
+			if errors.Is(err, screen.ErrInactive) {
+				return // switched to another mode while waiting to retry
+			}
 			s.log.Error("could not reload the channel after a stream failure",
 				"channel", ch.Number, "error", err)
-			if err := s.ShowNoChannel(ctx); err != nil {
+			if err := s.ShowNoChannel(ctx); err != nil && !errors.Is(err, screen.ErrInactive) {
 				s.log.Error("could not show the no-channel image", "error", err)
 			}
 		}
@@ -753,17 +841,17 @@ func (s *Service) WatchPlayback(ctx context.Context) error {
 
 		pos, state := s.playbackPosition(ctx)
 		switch state {
-		case posHalted:
+		case mpv.PositionHalted:
 			// Paused, buffering, or finished: the position is meant to be
 			// still, so this is not a stall and the clock is reset.
 			movedAt = s.clock.Now()
 			continue
-		case posUnknown:
+		case mpv.PositionUnknown:
 			// Unreadable is not progress. During the observed freeze several
 			// properties went unavailable while the picture sat still, so
 			// treating this as healthy would miss the very case this exists
 			// for. The timeout is long enough to absorb a brief gap at startup.
-		case posKnown:
+		case mpv.PositionKnown:
 			if pos != lastPos {
 				lastPos = pos
 				movedAt = s.clock.Now()
@@ -784,7 +872,7 @@ func (s *Service) WatchPlayback(ctx context.Context) error {
 			s.current = nil
 			s.shownImage = ""
 			s.mu.Unlock()
-			if err := s.ShowNoChannel(ctx); err != nil {
+			if err := s.ShowNoChannel(ctx); err != nil && !errors.Is(err, screen.ErrInactive) {
 				s.log.Error("could not show the no-channel image", "error", err)
 			}
 			movedAt = s.clock.Now()
@@ -804,7 +892,7 @@ func (s *Service) WatchPlayback(ctx context.Context) error {
 		s.current = nil
 		s.mu.Unlock()
 
-		if err := s.SelectChannel(ctx, ch); err != nil {
+		if err := s.SelectChannel(ctx, ch); err != nil && !errors.Is(err, screen.ErrInactive) {
 			s.log.Error("could not reload a stalled channel", "channel", ch.Number, "error", err)
 		}
 		lastPos = -1
@@ -812,43 +900,15 @@ func (s *Service) WatchPlayback(ctx context.Context) error {
 	}
 }
 
-// posState distinguishes the three answers that matter, because "no position"
-// and "position deliberately not moving" must not be confused: treating a
-// pause as a stall would reload a stream that is behaving.
-type posState int
-
-const (
-	// posKnown means the position was read and can be compared.
-	posKnown posState = iota
-	// posUnknown means it could not be read, which is not evidence of health.
-	posUnknown
-	// posHalted means something legitimately explains a still position.
-	posHalted
-)
-
 // playbackPosition reads mpv's playback position.
-func (s *Service) playbackPosition(ctx context.Context) (float64, posState) {
+func (s *Service) playbackPosition(ctx context.Context) (float64, mpv.PositionState) {
 	ctx, cancel := context.WithTimeout(ctx, s.mpvCfg.CommandTimeout.Duration)
 	defer cancel()
-
-	// A deliberate pause, buffering, or a finished file all stop the position
-	// without anything being wrong.
-	for _, name := range []string{"pause", "paused-for-cache", "eof-reached"} {
-		var flag bool
-		if err := s.player.GetProperty(ctx, name, &flag); err != nil {
-			continue // unreadable: fall through to the position check
-		}
-		if flag {
-			return 0, posHalted
-		}
+	pos, state := mpv.ProbePosition(ctx, s.player)
+	if state == mpv.PositionUnknown {
+		s.log.Debug("could not read the playback position")
 	}
-
-	var pos float64
-	if err := s.player.GetProperty(ctx, "time-pos", &pos); err != nil {
-		s.log.Debug("could not read the playback position", "error", err)
-		return 0, posUnknown
-	}
-	return pos, posKnown
+	return pos, state
 }
 
 // ChannelNumberInt returns a channel's number as an integer where possible,

@@ -163,6 +163,15 @@ channel_hysteresis = 0.25
 # up in diagnostics rather than vanishing.
 volume_pot_fitted = true
 
+# The mode knob (pot 2) chooses what the television is doing, and the channel
+# knob then chooses within that mode. Modes are listed from fully anticlockwise;
+# the first is also the mode used until the knob reports. Available: "tv"
+# (ErsatzTV channels) and "ambience" (looping videos from [ambience] dir).
+mode_knob = ["tv", "ambience"]
+# As with the volume knob, an unconnected pin floats. Set this false if pot 2 is
+# not wired, and the television stays in the first mode.
+mode_pot_fitted = true
+
 # Minimum volume change worth acting on, in percent.
 volume_deadband_percent = 2
 
@@ -406,6 +415,16 @@ shutdown_timeout = "10s"
 static_dir = ""
 
 websocket_ping_interval = "20s"
+
+[ambience]
+# One folder per ambience channel, picked with the channel knob in ambience mode:
+#   ch1/fireplace.mp4            a single video loops seamlessly
+#   ch2-rain/1.mp4, 2.mp4, ...   several play in order (2 before 10), then repeat
+# An optional name after the number appears on screen. Owned by the account that
+# ran setup.sh, so videos can be copied in with scp; changes are picked up
+# within rescan_interval.
+dir = "/srv/timeblaster/ambient"
+rescan_interval = "30s"
 
 [wifi]
 # The unix socket the privileged helper listens on. The main daemon never runs

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bradsheets/timeblaster/internal/alarm"
+	"github.com/bradsheets/timeblaster/internal/config"
 	"github.com/bradsheets/timeblaster/internal/ersatztv"
 	"github.com/bradsheets/timeblaster/internal/hardware"
 	"github.com/bradsheets/timeblaster/internal/input"
@@ -30,10 +31,10 @@ import (
 // as many bands as there are channels, *is* the current channel. A band of -1
 // means the knob is somewhere with no channel behind it, and the television
 // shows the standby image.
+//
+// What a band means belongs to the current mode: an ErsatzTV channel in TV
+// mode, an ambience folder in ambience mode.
 func (a *App) OnChannelSelect(ev input.ChannelSelect) {
-	if a.media == nil {
-		return
-	}
 	a.requestBand(ev.Band)
 }
 
@@ -74,9 +75,9 @@ func (a *App) OnVolumeChange(ev input.VolumeChange) {
 	}()
 }
 
-// OnReservedPot handles pots 2 and 3, which have no assigned function.
+// OnReservedPot handles pot 3, which has no assigned function.
 //
-// TODO: assign functions to pots 2 and 3. The plumbing is complete — filtering,
+// TODO: assign a function to pot 3. The plumbing is complete — filtering,
 // calibration and event delivery all work — so implementing one is a matter of
 // adding a case here and, if it maps to discrete positions, a band mapper in the
 // input router. Candidates considered: TV/media volume, display brightness,
@@ -279,8 +280,8 @@ func (a *App) LinkUp(device string) {
 	// have been turned and buttons pressed while the cable was out. Forget it all
 	// and let the Nano's first reports re-establish the truth.
 	a.router.Reset()
-	if a.media != nil {
-		a.router.SetChannelCount(a.media.ChannelCount())
+	if a.screen != nil {
+		a.router.SetChannelCount(a.wantedMode().ChannelCount())
 	}
 	a.publish(state.NewEvent(state.EventHardwareChanged, map[string]any{
 		"connected": true, "device": device,
@@ -309,20 +310,13 @@ func (a *App) LinkDown(err error) {
 // re-divides the knob's travel immediately, with no restart and nothing
 // hardcoded.
 func (a *App) ChannelListChanged(channels []ersatztv.Channel) {
-	// Re-band the knob for the new count and take its verdict. A nil verdict
-	// means the knob has never reported a position, so it cannot choose and the
-	// standby screen is the answer until it does.
+	// Re-band the knob for the new count and take its verdict -- but only in
+	// TV mode. In another mode the knob is divided for that mode's channels,
+	// and the TV's list is read afresh when the mode knob comes back to it.
 	//
 	// Exactly one request follows, which is the point: this used to both ask
 	// the knob and separately decide for itself, and the two raced.
-	band := -1
-	if sel := a.router.SetChannelCount(len(channels)); sel != nil {
-		band = sel.Band
-	} else if len(channels) > 0 {
-		a.log.Info("channels are available but the channel knob has not reported; "+
-			"showing the standby screen until it does", "channels", len(channels))
-	}
-	a.requestBand(band)
+	a.modeChannelsChanged(config.ModeTV)
 
 	a.publish(state.NewEvent(state.EventChannelsChanged, channels))
 }

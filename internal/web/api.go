@@ -13,6 +13,7 @@ import (
 	"github.com/bradsheets/timeblaster/internal/alarm"
 	"github.com/bradsheets/timeblaster/internal/audio"
 	"github.com/bradsheets/timeblaster/internal/media"
+	"github.com/bradsheets/timeblaster/internal/screen"
 	"github.com/bradsheets/timeblaster/internal/wifi"
 )
 
@@ -440,6 +441,10 @@ func (s *Server) handleSelectChannel(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	if err := s.deps.Media.SelectNumber(ctx, body.Number); err != nil {
+		if errors.Is(err, screen.ErrInactive) {
+			writeError(w, http.StatusConflict, errOtherMode)
+			return
+		}
 		if errors.Is(err, media.ErrNoChannels) {
 			writeError(w, http.StatusNotFound, "no such channel")
 			return
@@ -457,10 +462,19 @@ func (s *Server) handleSelectChannel(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// errOtherMode answers a TV request while the mode knob has the television in
+// another mode. The knob is authoritative, so this says how to get back rather
+// than overriding it.
+const errOtherMode = "The Timeblaster is not in TV mode. Turn the mode knob to TV to change channels."
+
 func (s *Server) handleClearChannel(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := reqContext(r, 20*time.Second)
 	defer cancel()
 	if err := s.deps.Media.ShowNoChannel(ctx); err != nil {
+		if errors.Is(err, screen.ErrInactive) {
+			writeError(w, http.StatusConflict, errOtherMode)
+			return
+		}
 		writeError(w, http.StatusBadGateway, "could not clear the channel", err.Error())
 		return
 	}

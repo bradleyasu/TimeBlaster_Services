@@ -10,9 +10,11 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bradsheets/timeblaster/internal/alarm"
+	"github.com/bradsheets/timeblaster/internal/ambience"
 	"github.com/bradsheets/timeblaster/internal/audio"
 	"github.com/bradsheets/timeblaster/internal/config"
 	"github.com/bradsheets/timeblaster/internal/ersatztv"
@@ -20,6 +22,7 @@ import (
 	"github.com/bradsheets/timeblaster/internal/input"
 	"github.com/bradsheets/timeblaster/internal/media"
 	"github.com/bradsheets/timeblaster/internal/mpv"
+	"github.com/bradsheets/timeblaster/internal/screen"
 	"github.com/bradsheets/timeblaster/internal/serialport"
 	"github.com/bradsheets/timeblaster/internal/state"
 	"github.com/bradsheets/timeblaster/internal/storage"
@@ -70,6 +73,11 @@ type App struct {
 	tvSuper  *mpv.Supervisor
 	overlay  *mpv.OverlayRenderer
 	media    *media.Service
+	ambience *ambience.Mode
+	// screen switches the television between modes. Nil without a player.
+	screen *screen.Director
+	// wantMode is the mode knob's choice, as an index into the knob's modes.
+	wantMode atomic.Int32
 	wifi     wifi.Manager
 	hub      *wsocket.Hub
 	web      *web.Server
@@ -77,16 +85,6 @@ type App struct {
 
 	// ownsStore records whether we opened the database and must close it.
 	ownsStore bool
-
-	// screenReq carries the latest band the television should be showing: a
-	// channel index, or -1 for the standby screen.
-	//
-	// One buffered slot, newest wins. Every decision about what is on screen
-	// goes through here and is applied by a single goroutine, which is what
-	// stops two of them racing -- loading a stream takes seconds and must not
-	// block the input path, so the work has to be asynchronous, and once it is
-	// asynchronous the only safe number of deciders is one.
-	screenReq chan int
 
 	// displayMu guards displayGen, the seven-segment display's claim counter.
 	//
@@ -192,14 +190,13 @@ func New(cfg config.Config, log *slog.Logger, version string, deps Deps) (*App, 
 	}
 
 	a := &App{
-		cfg:       cfg,
-		log:       log,
-		clock:     clock,
-		disk:      disk,
-		version:   version,
-		sup:       newSupervisor(log),
-		tracker:   state.NewTracker(version, cfg.General.Hostname, clock.Now()),
-		screenReq: make(chan int, 1),
+		cfg:     cfg,
+		log:     log,
+		clock:   clock,
+		disk:    disk,
+		version: version,
+		sup:     newSupervisor(log),
+		tracker: state.NewTracker(version, cfg.General.Hostname, clock.Now()),
 	}
 
 	if err := ensureRuntimeDir(cfg.Storage.RuntimeDir); err != nil {
@@ -387,6 +384,8 @@ func (a *App) initHardware(deps Deps) {
 	inputCfg.ChannelHysteresis = a.cfg.Input.ChannelHysteresis
 	inputCfg.VolumeDeadband = a.cfg.Input.VolumeDeadbandPercent
 	inputCfg.VolumePotFitted = a.cfg.Input.VolumePotFitted
+	inputCfg.ModeCount = len(a.cfg.Input.ModeKnob)
+	inputCfg.ModePotFitted = a.cfg.Input.ModePotFitted
 	inputCfg.HoldDuration = a.cfg.Input.WiFiHoldDuration.Duration
 	inputCfg.MinPressDuration = a.cfg.Input.MinPressDuration.Duration
 	inputCfg.PollInterval = a.cfg.Input.HoldPollInterval.Duration
@@ -482,7 +481,7 @@ func (a *App) initMedia(deps Deps) error {
 		ErsatzTV: etv, Player: player, Overlay: a.overlay,
 		Clock: a.clock, Logger: a.log.With("component", "media"), Observer: a,
 	})
-	return nil
+	return a.initScreen()
 }
 
 func (a *App) initWiFi(deps Deps) {
@@ -539,6 +538,9 @@ func (a *App) registerTasks() {
 	if a.media != nil {
 		a.sup.add("channel-refresh", false, a.media.Run)
 		a.sup.add("playback-watchdog", false, a.media.WatchPlayback)
+	}
+	if a.ambience != nil {
+		a.sup.add("ambience", false, a.ambience.Run)
 	}
 	a.sup.add("screen", false, a.runScreen)
 	a.sup.add("clock-broadcast", false, a.runClockBroadcast)
@@ -609,7 +611,10 @@ func (a *App) Run(ctx context.Context) error {
 
 	// Put something on the television before anything else can, so a Linux
 	// console is never visible.
-	if a.media != nil {
+	if a.screen != nil && a.screen.Active().ID() != config.ModeTV {
+		// Another mode comes first on the knob; it shows its own standby.
+		a.requestBand(-1)
+	} else if a.media != nil {
 		go func() {
 			showCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
@@ -647,52 +652,6 @@ func (a *App) shutdown() {
 		}
 	}
 	a.log.Info("timeblaster stopped")
-}
-
-// runScreen applies channel selections, one at a time and in order.
-//
-// Requests arrive from the channel knob, from the channel list changing, and
-// from the companion app. Applying them concurrently let a slow one finish
-// after a newer one and leave the wrong thing on screen; applying them here
-// means the most recent request always wins.
-func (a *App) runScreen(ctx context.Context) error {
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case band := <-a.screenReq:
-			if a.media == nil {
-				continue
-			}
-			// Bounded, because a stream that will not start must not wedge the
-			// queue and leave later requests unapplied.
-			reqCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-			err := a.media.SelectBand(reqCtx, band)
-			cancel()
-			if err != nil {
-				a.log.Warn("could not put the requested channel on screen",
-					"band", band, "error", err)
-			}
-		}
-	}
-}
-
-// requestBand asks for a band to be shown. It never blocks: a pending request
-// that has not been applied yet is simply replaced, because a burst of knob
-// movement only ever means "show me where it ended up".
-func (a *App) requestBand(band int) {
-	// Discard a request that has not been applied yet, then post this one. Both
-	// steps are non-blocking, so a knob being swept never stalls the input path.
-	select {
-	case <-a.screenReq:
-	default:
-	}
-	select {
-	case a.screenReq <- band:
-	default:
-		// Another caller got there in between. Theirs is at least as fresh as
-		// this one, so leaving it alone is correct.
-	}
 }
 
 // runClockBroadcast pushes the time to connected apps once a second.
@@ -746,14 +705,14 @@ func (a *App) onPlayerConnect(ctx context.Context, c *mpv.Client) {
 	// can land on the alarm speaker. Point it back where the user asked.
 	a.applyTVAudioOutput(ctx)
 
-	if a.media != nil {
-		a.media.RestorePlayback(ctx)
+	if a.screen != nil {
+		a.screen.RestorePlayback()
 	}
 }
 
 func (a *App) onPlayerEvent(ev mpv.Event) {
-	if a.media != nil {
-		a.media.HandlePlayerEvent(ev)
+	if a.screen != nil {
+		a.screen.HandlePlayerEvent(ev)
 	}
 }
 

@@ -193,6 +193,7 @@
       case 'hardware_changed':
       case 'wifi_changed':
       case 'settings_changed':
+      case 'screen_changed':
         // Every change refetches the full snapshot. The device is one user and
         // a handful of fields; a correct, simple refresh beats incremental
         // patching that can drift out of step.
@@ -444,9 +445,35 @@
 
   // --- Television ---------------------------------------------------------
 
+  // The TV tab follows the mode knob: ErsatzTV's channels in TV mode, the
+  // ambience folders in ambience mode. A mode added later shows its name and
+  // a note rather than a list it does not have.
   function renderChannels() {
     var list = $('channel-list');
     list.innerHTML = '';
+    var screen = (state && state.screen) || {};
+    var mode = screen.mode || 'tv';
+
+    var kv = $('tv-mode');
+    kv.innerHTML = '';
+    var row = document.createElement('div');
+    row.className = 'kv-row';
+    row.innerHTML = '<span class="name">Mode</span><span class="value">' +
+      escapeHTML(screen.title || 'TV') + '</span>';
+    kv.appendChild(row);
+
+    $('btn-clear-channel').hidden = mode !== 'tv';
+    if (mode === 'ambience') {
+      renderAmbience(list, screen);
+      return;
+    }
+    if (mode !== 'tv') {
+      $('tv-hint').textContent = 'Turn the mode knob to TV to choose a channel here.';
+      return;
+    }
+    $('tv-hint').textContent = 'The channel knob on the Timeblaster is authoritative. ' +
+      'Choosing here holds until the knob is next moved.';
+
     var channels = (state && state.channels) || [];
     var current = state && state.media && state.media.current_channel;
 
@@ -473,6 +500,34 @@
           .then(function () { toast('Channel ' + c.number); return refresh(); })
           .catch(fail);
       });
+      list.appendChild(card);
+    });
+  }
+
+  // renderAmbience lists the ambience folders. They are chosen with the channel
+  // knob only: the list is for seeing what is there and what is playing.
+  function renderAmbience(list, screen) {
+    var channels = screen.ambience_channels || [];
+    var playing = screen.showing && screen.showing.number;
+    var dir = screen.ambience_dir || 'the ambient folder';
+
+    if (!channels.length) {
+      $('tv-hint').textContent = '';
+      list.appendChild(emptyRow('No ambience videos yet. Copy them into numbered folders: ' +
+        dir + '/ch1, ' + dir + '/ch2, and so on.'));
+      return;
+    }
+    $('tv-hint').textContent = 'The channel knob picks an ambience channel. ' +
+      'Add more as numbered folders in ' + dir + '.';
+
+    channels.forEach(function (c) {
+      var card = document.createElement('div');
+      card.className = 'card' + (String(c.number) === playing ? ' selected' : '');
+      card.innerHTML =
+        '<div class="card-main">' +
+        '<div class="card-time">' + escapeHTML(String(c.number)) + '</div>' +
+        '<div class="card-sub">' + escapeHTML(c.name || ('Ambience ' + c.number)) + '</div>' +
+        '</div>';
       list.appendChild(card);
     });
   }

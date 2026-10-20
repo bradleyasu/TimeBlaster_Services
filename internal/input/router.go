@@ -15,8 +15,9 @@ const (
 	PotChannel = 0
 	// PotAlarmVolume sets the USB alarm speaker volume. The knob is authoritative.
 	PotAlarmVolume = 1
-	// PotReservedA is unassigned. TODO: assign a function to pot 2.
-	PotReservedA = 2
+	// PotMode selects the television mode (absolute position): TV, ambience,
+	// and whatever is added later.
+	PotMode = 2
 	// PotReservedB is unassigned. TODO: assign a function to pot 3.
 	PotReservedB = 3
 
@@ -42,8 +43,16 @@ type VolumeChange struct {
 	Physical bool
 }
 
+// ModeSelect asks for a television mode.
+type ModeSelect struct {
+	// Band is the zero-based mode index, in the configured knob order.
+	Band int
+	// Position is the filtered knob position, 0.0..1.0.
+	Position float64
+}
+
 // ReservedPotChange reports movement of a pot with no assigned function yet.
-// TODO: remove once pots 2 and 3 are assigned.
+// TODO: remove once pot 3 is assigned.
 type ReservedPotChange struct {
 	Index    int
 	Position float64
@@ -63,6 +72,7 @@ type ButtonEvent struct {
 // dispatched asynchronously by the handler.
 type Handler interface {
 	OnChannelSelect(ChannelSelect)
+	OnModeSelect(ModeSelect)
 	OnVolumeChange(VolumeChange)
 	OnButton(ButtonEvent)
 	OnReservedPot(ReservedPotChange)
@@ -80,7 +90,14 @@ type Config struct {
 	// readings from its pin are still filtered and reported for diagnostics but
 	// never move the alarm volume: an unconnected ADC pin floats, and letting
 	// that noise set the volume of an alarm is how an alarm gets missed.
-	VolumePotFitted  bool
+	VolumePotFitted bool
+	// ModeCount is how many modes the mode knob is divided between. Zero or
+	// one leaves the knob with nothing to choose.
+	ModeCount int
+	// ModePotFitted says whether the mode knob exists. Without it the pin is
+	// still filtered and reported, but never changes the mode: a floating pin
+	// flipping the television between modes is worse than having no knob.
+	ModePotFitted    bool
 	HoldDuration     time.Duration
 	MinPressDuration time.Duration
 	// PollInterval is how often held buttons are checked against the hold
@@ -98,6 +115,8 @@ func DefaultConfig() Config {
 		ChannelHysteresis: 0.25,
 		VolumeDeadband:    2,
 		VolumePotFitted:   true,
+		ModeCount:         1,
+		ModePotFitted:     true,
 		HoldDuration:      5 * time.Second,
 		MinPressDuration:  30 * time.Millisecond,
 		PollInterval:      100 * time.Millisecond,
@@ -119,6 +138,7 @@ type Router struct {
 	filters [PotCount]*Filter
 	rawLast [PotCount]int
 	bands   *HysteresisBands
+	modes   *HysteresisBands
 	volume  *Deadband
 	buttons map[string]*HoldTracker
 
@@ -134,11 +154,14 @@ func NewRouter(cfg Config, clock system.Clock, log *slog.Logger, handler Handler
 		cfg.PollInterval = 100 * time.Millisecond
 	}
 	r := &Router{
-		cfg:      cfg,
-		clock:    clock,
-		log:      log,
-		handler:  handler,
-		bands:    NewHysteresisBands(0, cfg.ChannelHysteresis),
+		cfg:     cfg,
+		clock:   clock,
+		log:     log,
+		handler: handler,
+		bands:   NewHysteresisBands(0, cfg.ChannelHysteresis),
+		// The mode knob gets the channel knob's hysteresis: a knob resting on
+		// a boundary must not flick the television between modes.
+		modes:    NewHysteresisBands(cfg.ModeCount, cfg.ChannelHysteresis),
 		volume:   NewDeadband(cfg.VolumeDeadband),
 		buttons:  map[string]*HoldTracker{},
 		pollWake: make(chan struct{}, 1),
@@ -229,14 +252,23 @@ func (r *Router) PotReport(index, raw int) {
 	handler := r.handler
 
 	var (
-		chEv  *ChannelSelect
-		volEv *VolumeChange
-		resEv *ReservedPotChange
+		chEv   *ChannelSelect
+		modeEv *ModeSelect
+		volEv  *VolumeChange
+		resEv  *ReservedPotChange
 	)
 	switch index {
 	case PotChannel:
 		if band, changed := r.bands.Update(pos); changed {
 			chEv = &ChannelSelect{Band: band, Position: pos}
+		}
+	case PotMode:
+		// A knob that is not fitted still reports, for diagnostics, but
+		// never chooses.
+		if r.cfg.ModePotFitted {
+			if band, changed := r.modes.Update(pos); changed {
+				modeEv = &ModeSelect{Band: band, Position: pos}
+			}
 		}
 	case PotAlarmVolume:
 		// Update regardless, so Position() still reports what the pin reads and
@@ -246,7 +278,7 @@ func (r *Router) PotReport(index, raw int) {
 			volEv = &VolumeChange{Percent: pct, Physical: true}
 		}
 	default:
-		// TODO: pots 2 and 3 have no assigned function. They are still filtered and
+		// TODO: pot 3 has no assigned function. It is still filtered and
 		// surfaced so a future feature can be added without touching this path.
 		resEv = &ReservedPotChange{Index: index, Position: pos}
 	}
@@ -262,6 +294,9 @@ func (r *Router) PotReport(index, raw int) {
 	case chEv != nil:
 		r.log.Info("channel knob selected band", "band", chEv.Band, "position", roundTo(chEv.Position, 3))
 		handler.OnChannelSelect(*chEv)
+	case modeEv != nil:
+		r.log.Info("mode knob selected band", "band", modeEv.Band, "position", roundTo(modeEv.Position, 3))
+		handler.OnModeSelect(*modeEv)
 	case volEv != nil:
 		r.log.Info("alarm volume knob moved", "percent", volEv.Percent)
 		handler.OnVolumeChange(*volEv)
@@ -334,6 +369,7 @@ func (r *Router) Reset() {
 		r.rawLast[i] = 0
 	}
 	r.bands.Reset()
+	r.modes.Reset()
 	r.volume.Reset()
 	for _, tr := range r.buttons {
 		tr.Reset()

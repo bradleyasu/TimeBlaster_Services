@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -63,6 +64,30 @@ type Config struct {
 	Web      Web      `toml:"web"`
 	WiFi     WiFi     `toml:"wifi"`
 	Firmware Firmware `toml:"firmware"`
+	Ambience Ambience `toml:"ambience"`
+}
+
+// Television modes, by the IDs the mode knob is configured with.
+const (
+	ModeTV       = "tv"
+	ModeAmbience = "ambience"
+)
+
+// ScreenModes is every mode the daemon can build. Adding a mode means
+// implementing screen.Mode and adding its ID here.
+var ScreenModes = []string{ModeTV, ModeAmbience}
+
+// Ambience configures the ambience mode: looping local videos, chosen with the
+// channel knob.
+type Ambience struct {
+	// Dir holds one folder per ambience channel, named ch1, ch2 and so on --
+	// optionally with a name, as in ch1-fireplace. Each holds one or more
+	// videos, played in natural order (2.mp4 before 10.mp4) and repeated. A
+	// single video loops seamlessly.
+	Dir string `toml:"dir"`
+	// RescanInterval is how often Dir is re-read, so videos copied in show up
+	// without a restart.
+	RescanInterval Duration `toml:"rescan_interval"`
 }
 
 // General holds device-wide settings.
@@ -218,6 +243,14 @@ type Input struct {
 	// design. Set this false until the knob is wired, or the volume will drift
 	// on its own -- and a drifting alarm volume is a missed alarm.
 	VolumePotFitted bool `toml:"volume_pot_fitted"`
+	// ModeKnob lists the television modes the mode knob (pot 2) selects
+	// between, in order from fully anticlockwise. The first is also the mode
+	// the Timeblaster starts in before the knob has reported. See ScreenModes.
+	ModeKnob []string `toml:"mode_knob"`
+	// ModePotFitted says whether the mode knob is wired. Like the volume knob,
+	// an unconnected pin floats, and letting that noise flip the television
+	// between modes would be maddening; without it the first mode stays put.
+	ModePotFitted bool `toml:"mode_pot_fitted"`
 	// VolumeDeadbandPercent is the minimum volume change worth acting on.
 	VolumeDeadbandPercent int `toml:"volume_deadband_percent"`
 	// WiFiHoldDuration is how long the Wi-Fi button must be held to enter setup
@@ -509,6 +542,8 @@ func Default() Config {
 			FilterSnapThreshold:   0.08,
 			ChannelHysteresis:     0.25,
 			VolumePotFitted:       true,
+			ModeKnob:              []string{ModeTV, ModeAmbience},
+			ModePotFitted:         true,
 			VolumeDeadbandPercent: 2,
 			WiFiHoldDuration:      Dur(5 * time.Second),
 			MinPressDuration:      Dur(30 * time.Millisecond),
@@ -651,6 +686,13 @@ func Default() Config {
 			ConnectTimeout:  Dur(45 * time.Second),
 			ValidateTimeout: Dur(30 * time.Second),
 			ScanTimeout:     Dur(20 * time.Second),
+		},
+		Ambience: Ambience{
+			// Not under /var/lib/timeblaster, which only the service account
+			// can enter: videos are large, and copying them in should be a
+			// plain scp, not scp-then-sudo. The daemon only reads them.
+			Dir:            "/srv/timeblaster/ambient",
+			RescanInterval: Dur(30 * time.Second),
 		},
 		Firmware: Firmware{
 			Image:        "/usr/local/share/timeblaster/firmware/nano-firmware.bin",
@@ -826,6 +868,27 @@ func (c Config) Validate() error {
 	}
 	if c.Input.HoldPollInterval.Duration <= 0 {
 		add("input.hold_poll_interval must be positive")
+	}
+	if len(c.Input.ModeKnob) == 0 {
+		add("input.mode_knob must list at least one mode, from %v", ScreenModes)
+	}
+	seenModes := map[string]bool{}
+	for _, m := range c.Input.ModeKnob {
+		switch {
+		case !slices.Contains(ScreenModes, m):
+			add("input.mode_knob: %q is not a mode; choose from %v", m, ScreenModes)
+		case seenModes[m]:
+			add("input.mode_knob lists %q twice", m)
+		}
+		seenModes[m] = true
+	}
+
+	// ambience
+	if !filepath.IsAbs(c.Ambience.Dir) {
+		add("ambience.dir must be an absolute path, got %q", c.Ambience.Dir)
+	}
+	if c.Ambience.RescanInterval.Duration <= 0 {
+		add("ambience.rescan_interval must be positive")
 	}
 
 	// audio

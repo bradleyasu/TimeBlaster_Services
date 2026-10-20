@@ -32,6 +32,10 @@ readonly CONFIG_DIR="/etc/timeblaster"
 readonly CONFIG_FILE="${CONFIG_DIR}/timeblaster.toml"
 readonly STATE_DIR="/var/lib/timeblaster"
 readonly SOUNDS_DIR="${STATE_DIR}/alarm-sounds"
+# Ambience videos. Outside STATE_DIR, which only the service account can enter,
+# and owned by whoever ran setup so videos can be copied in with a plain scp.
+# The daemon only ever reads them.
+readonly AMBIENT_DIR="/srv/timeblaster/ambient"
 readonly SHARE_DIR="/usr/share/timeblaster"
 readonly ASSETS_DIR="${SHARE_DIR}/assets"
 readonly DOC_DIR="/usr/share/doc/timeblaster"
@@ -347,6 +351,15 @@ create_directories() {
   run chmod 0755 "$SOUNDS_DIR"
   run chown root:root "$CONFIG_DIR"
   run chmod 0755 "$CONFIG_DIR"
+
+  local owner="${SUDO_USER:-root}"
+  if [[ -d "$AMBIENT_DIR" ]]; then
+    skip "${AMBIENT_DIR} exists"
+  else
+    run install -d -m 0755 "$(dirname "$AMBIENT_DIR")"
+    run install -d -m 0755 -o "$owner" -g "$owner" "$AMBIENT_DIR"
+    ok "created ${AMBIENT_DIR} for ambience videos (owned by ${owner})"
+  fi
 }
 
 # ---------------------------------------------------------------------------
