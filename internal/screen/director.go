@@ -158,7 +158,16 @@ func (d *Director) apply(ctx context.Context, r Request) {
 
 	reqCtx, cancel := context.WithTimeout(ctx, applyTimeout)
 	defer cancel()
-	if err := to.SelectBand(reqCtx, r.Band); err != nil && !errors.Is(err, ErrInactive) {
+	err := to.SelectBand(reqCtx, r.Band)
+	switch {
+	case err == nil, errors.Is(err, ErrInactive):
+	case errors.Is(err, mpv.ErrNotConnected):
+		// Normal at boot: the first request lands a second or two before mpv
+		// has the display, and the mode's picture is restored the moment it
+		// connects. A warning here would be a red line in every boot.
+		d.log.Debug("player not ready yet; the picture is restored when it connects",
+			"mode", to.ID(), "band", r.Band)
+	default:
 		d.log.Warn("could not put the requested channel on screen",
 			"mode", to.ID(), "band", r.Band, "error", err)
 	}
