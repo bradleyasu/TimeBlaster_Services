@@ -238,3 +238,19 @@ func TestEverySettingsControlSavesItself(t *testing.T) {
 		}
 	}
 }
+
+func TestGuideDescriptionsAreEscapedAndClamped(t *testing.T) {
+	// Synopses come from ErsatzTV's library, not from us, and go into
+	// innerHTML: escaped, or a title could inject markup into the app.
+	js := readStatic(t, "app.js")
+	if !strings.Contains(js, "escapeHTML(p.description)") {
+		t.Error("guide descriptions are not escaped")
+	}
+	css := readStatic(t, "app.css")
+	if !regexp.MustCompile(`\.guide-desc\s*\{[^}]*line-clamp:\s*2`).MatchString(css) {
+		t.Error("guide descriptions are not clamped to two lines")
+	}
+	if !regexp.MustCompile(`\.guide-row\.now \.guide-desc\s*\{[^}]*line-clamp:\s*none`).MatchString(css) {
+		t.Error("the programme on now does not show its whole description")
+	}
+}

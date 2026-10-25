@@ -615,6 +615,9 @@
         '<div class="guide-title">' + escapeHTML(p.title || 'Untitled') +
         (on ? '<span class="guide-badge">NOW</span>' : '') + '</div>' +
         (p.subTitle ? '<div class="guide-sub">' + escapeHTML(p.subTitle) + '</div>' : '') +
+        // In full for what is on now; two lines for the rest, so 48 hours of
+        // listings stays a list rather than a wall of synopses.
+        (p.description ? '<div class="guide-desc">' + escapeHTML(p.description) + '</div>' : '') +
         '</div></div>';
     });
     list.innerHTML = html;

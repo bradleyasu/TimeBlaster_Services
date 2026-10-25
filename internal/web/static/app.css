@@ -332,6 +332,13 @@ main { max-width: 640px; margin: 0 auto; padding: 0 14px 40px; }
 .guide-body { min-width: 0; }
 .guide-title { color: var(--text); overflow-wrap: anywhere; }
 .guide-sub { color: var(--muted); font-size: 12px; margin-top: 2px; overflow-wrap: anywhere; }
+.guide-desc {
+  color: var(--text); opacity: .8; font-size: 12px; line-height: 1.4; margin-top: 4px;
+  overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2;
+  overflow: hidden;
+}
+.guide-row.now .guide-desc { display: block; -webkit-line-clamp: none; line-clamp: none; }
 .guide-badge {
   display: inline-block; margin-left: 8px; padding: 1px 7px;
   background: var(--green); color: #051405;
