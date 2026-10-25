@@ -80,10 +80,13 @@ type App struct {
 	screen *screen.Director
 	// wantMode is the mode knob's choice, as an index into the knob's modes.
 	wantMode atomic.Int32
-	wifi     wifi.Manager
-	hub      *wsocket.Hub
-	web      *web.Server
-	sup      *supervisor
+	// audioOutMu serialises switching the television's audio, which the app
+	// and the audio knob can both ask for at once.
+	audioOutMu sync.Mutex
+	wifi       wifi.Manager
+	hub        *wsocket.Hub
+	web        *web.Server
+	sup        *supervisor
 
 	// ownsStore records whether we opened the database and must close it.
 	ownsStore bool
@@ -387,6 +390,8 @@ func (a *App) initHardware(deps Deps) {
 	inputCfg.VolumeDeadband = a.cfg.Input.VolumeDeadbandPercent
 	inputCfg.VolumePotFitted = a.cfg.Input.VolumePotFitted
 	inputCfg.ChannelMarks = a.cfg.Input.ChannelMarks
+	inputCfg.AudioMarks = a.cfg.Input.AudioMarks
+	inputCfg.AudioPotFitted = a.cfg.Input.AudioPotFitted
 	inputCfg.ModeCount = len(a.cfg.Input.ModeKnob)
 	inputCfg.ModePotFitted = a.cfg.Input.ModePotFitted
 	inputCfg.HoldDuration = a.cfg.Input.WiFiHoldDuration.Duration

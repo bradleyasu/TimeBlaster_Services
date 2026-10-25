@@ -18,7 +18,7 @@ type recordingHandler struct {
 	channels []ChannelSelect
 	volumes  []VolumeChange
 	buttons  []ButtonEvent
-	reserved []ReservedPotChange
+	reserved []AudioOutputSelect
 	modes    []ModeSelect
 	notify   chan struct{}
 }
@@ -56,7 +56,7 @@ func (r *recordingHandler) modeEvents() []ModeSelect {
 	defer r.mu.Unlock()
 	return append([]ModeSelect(nil), r.modes...)
 }
-func (r *recordingHandler) OnReservedPot(e ReservedPotChange) {
+func (r *recordingHandler) OnAudioOutputSelect(e AudioOutputSelect) {
 	r.mu.Lock()
 	r.reserved = append(r.reserved, e)
 	r.mu.Unlock()
@@ -69,13 +69,13 @@ func (r *recordingHandler) ping() {
 	}
 }
 
-func (r *recordingHandler) snapshot() ([]ChannelSelect, []VolumeChange, []ButtonEvent, []ReservedPotChange) {
+func (r *recordingHandler) snapshot() ([]ChannelSelect, []VolumeChange, []ButtonEvent, []AudioOutputSelect) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]ChannelSelect(nil), r.channels...),
 		append([]VolumeChange(nil), r.volumes...),
 		append([]ButtonEvent(nil), r.buttons...),
-		append([]ReservedPotChange(nil), r.reserved...)
+		append([]AudioOutputSelect(nil), r.reserved...)
 }
 
 func newTestRouter(t *testing.T) (*Router, *recordingHandler, *system.FakeClock) {
@@ -149,18 +149,67 @@ func TestRouterVolumeKnobIsPhysical(t *testing.T) {
 	}
 }
 
-func TestRouterReservedPotIsSurfacedNotActedOn(t *testing.T) {
-	r, h, _ := newTestRouter(t)
-	r.SetChannelCount(4)
+func audioRouter(t *testing.T, marks []int, fitted bool) (*Router, *recordingHandler) {
+	t.Helper()
+	cfg := DefaultConfig()
+	cfg.AudioMarks, cfg.AudioPotFitted = marks, fitted
+	h := newRecordingHandler()
+	return NewRouter(cfg, system.NewFakeClock(t0), slog.New(slog.NewTextHandler(io.Discard, nil)), h), h
+}
 
-	r.PotReport(PotReservedB, 3000)
-
-	chs, vols, _, reserved := h.snapshot()
-	if len(chs) != 0 || len(vols) != 0 || len(h.modeEvents()) != 0 {
-		t.Errorf("the reserved pot must not drive anything: %+v %+v %+v", chs, vols, h.modeEvents())
+// audioAt settles the audio knob at raw and returns every band it reported.
+func audioAt(r *Router, h *recordingHandler, raw int) []int {
+	for range 30 {
+		r.PotReport(PotAudio, raw)
 	}
-	if len(reserved) != 1 || reserved[0].Index != PotReservedB {
-		t.Fatalf("reserved events: %+v", reserved)
+	_, _, _, evs := h.snapshot()
+	var bands []int
+	for _, e := range evs {
+		bands = append(bands, e.Band)
+	}
+	return bands
+}
+
+func TestTheAudioKnobIsATwoPositionSwitch(t *testing.T) {
+	r, h := audioRouter(t, nil, true)
+	audioAt(r, h, 300)
+	audioAt(r, h, 3800)
+	got := audioAt(r, h, 300)
+	if len(got) != 3 || got[0] != 0 || got[1] != 1 || got[2] != 0 {
+		t.Errorf("bands %v, want [0 1 0]", got)
+	}
+	chs, vols, _, _ := h.snapshot()
+	if len(chs) != 0 || len(vols) != 0 || len(h.modeEvents()) != 0 {
+		t.Error("the audio knob drove another control")
+	}
+}
+
+func TestTheAudioKnobFollowsItsMeasuredEnds(t *testing.T) {
+	// A housing that limits the knob to 2400-3100 never reaches the pot's
+	// middle: split by the pot's full travel, it would be stuck on one
+	// output. Calibrated to its ends, both are reachable.
+	r, h := audioRouter(t, []int{2400, 3100}, true)
+	if got := audioAt(r, h, 2400); got[len(got)-1] != 0 {
+		t.Errorf("HDMI end: band %d, want 0", got[len(got)-1])
+	}
+	if got := audioAt(r, h, 3100); got[len(got)-1] != 1 {
+		t.Errorf("USB end: band %d, want 1", got[len(got)-1])
+	}
+	// Resting in the middle does not flip it back and forth.
+	before := len(audioAt(r, h, 2760))
+	if after := len(audioAt(r, h, 2740)); after != before {
+		t.Error("a knob resting between its ends flickered between outputs")
+	}
+}
+
+func TestAnUnfittedAudioKnobSwitchesNothing(t *testing.T) {
+	r, h := audioRouter(t, nil, false)
+	audioAt(r, h, 300)
+	if got := audioAt(r, h, 3800); len(got) != 0 {
+		t.Errorf("an unfitted knob switched the audio: %v", got)
+	}
+	if _, primed := r.Position(PotAudio); !primed {
+		t.Error("an unfitted knob's position is not reported")
 	}
 }
 

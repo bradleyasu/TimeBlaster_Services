@@ -18,8 +18,9 @@ const (
 	// PotMode selects the television mode (absolute position): TV, ambience,
 	// and whatever is added later.
 	PotMode = 2
-	// PotReservedB is unassigned. TODO: assign a function to pot 3.
-	PotReservedB = 3
+	// PotAudio switches the television's sound between HDMI and the USB
+	// speaker: a two-position switch made of a knob.
+	PotAudio = 3
 
 	// PotCount is how many potentiometers the Router tracks.
 	PotCount = 4
@@ -51,10 +52,11 @@ type ModeSelect struct {
 	Position float64
 }
 
-// ReservedPotChange reports movement of a pot with no assigned function yet.
-// TODO: remove once pot 3 is assigned.
-type ReservedPotChange struct {
-	Index    int
+// AudioOutputSelect asks for the television's sound to go somewhere else.
+type AudioOutputSelect struct {
+	// Band is 0 for the knob's first position (HDMI) and 1 for its second
+	// (the USB speaker).
+	Band     int
 	Position float64
 }
 
@@ -75,7 +77,7 @@ type Handler interface {
 	OnModeSelect(ModeSelect)
 	OnVolumeChange(VolumeChange)
 	OnButton(ButtonEvent)
-	OnReservedPot(ReservedPotChange)
+	OnAudioOutputSelect(AudioOutputSelect)
 }
 
 // Config tunes the Router's signal processing. It mirrors the [input] section of
@@ -95,6 +97,12 @@ type Config struct {
 	// channel dial, mark 1 first. When set, the knob selects the nearest mark
 	// and mark k is channel k; when empty, its travel is divided equally.
 	ChannelMarks []int
+	// AudioMarks calibrates the audio knob: the raw readings at the ends of
+	// its travel, HDMI end first. Empty splits the pot's full travel in half.
+	AudioMarks []int
+	// AudioPotFitted says whether the audio knob is wired. Without it the pin
+	// is still reported but never switches anything.
+	AudioPotFitted bool
 	// ModeCount is how many modes the mode knob is divided between. Zero or
 	// one leaves the knob with nothing to choose.
 	ModeCount int
@@ -121,6 +129,7 @@ func DefaultConfig() Config {
 		VolumePotFitted:   true,
 		ModeCount:         1,
 		ModePotFitted:     true,
+		AudioPotFitted:    true,
 		HoldDuration:      5 * time.Second,
 		MinPressDuration:  30 * time.Millisecond,
 		PollInterval:      100 * time.Millisecond,
@@ -143,10 +152,11 @@ type Router struct {
 	rawLast [PotCount]int
 	bands   bandMapper
 	modes   *HysteresisBands
-	// chanCal is the channel knob's calibration: the shared one, except
-	// without end margins when the knob is calibrated to marks, which would
-	// otherwise snap a mark near either end onto the end itself.
-	chanCal Calibration
+	audio   bandMapper
+	// cals are each knob's calibration: the shared one, except without end
+	// margins for a knob calibrated to marks, which would otherwise snap a
+	// mark near either end onto the end itself.
+	cals    [PotCount]Calibration
 	volume  *Deadband
 	buttons map[string]*HoldTracker
 
@@ -166,8 +176,6 @@ func NewRouter(cfg Config, clock system.Clock, log *slog.Logger, handler Handler
 		clock:   clock,
 		log:     log,
 		handler: handler,
-		bands:   NewHysteresisBands(0, cfg.ChannelHysteresis),
-		chanCal: cfg.Calibration,
 		// The mode knob gets the channel knob's hysteresis: a knob resting on
 		// a boundary must not flick the television between modes.
 		modes:    NewHysteresisBands(cfg.ModeCount, cfg.ChannelHysteresis),
@@ -177,16 +185,28 @@ func NewRouter(cfg Config, clock system.Clock, log *slog.Logger, handler Handler
 	}
 	for i := range r.filters {
 		r.filters[i] = NewFilter(cfg.FilterAlpha, cfg.FilterSnap)
+		r.cals[i] = cfg.Calibration
 	}
-	if len(cfg.ChannelMarks) > 0 {
-		r.chanCal.EndMarginPercent = 0
-		marks := make([]float64, len(cfg.ChannelMarks))
-		for i, raw := range cfg.ChannelMarks {
-			marks[i] = r.chanCal.Normalize(raw)
-		}
-		r.bands = NewMarkedBands(marks, cfg.ChannelHysteresis)
-	}
+	r.bands, r.cals[PotChannel] = knobBands(cfg.Calibration, cfg.ChannelMarks, 0, cfg.ChannelHysteresis)
+	r.audio, r.cals[PotAudio] = knobBands(cfg.Calibration, cfg.AudioMarks, 2, cfg.ChannelHysteresis)
 	return r
+}
+
+// knobBands builds a knob's band mapper -- its measured marks when it has
+// been calibrated, equal slices of its travel when not -- and the calibration
+// its readings should be normalised with.
+func knobBands(cal Calibration, marks []int, count int, margin float64) (bandMapper, Calibration) {
+	if len(marks) == 0 {
+		return NewHysteresisBands(count, margin), cal
+	}
+	cal.EndMarginPercent = 0
+	norm := make([]float64, len(marks))
+	for i, raw := range marks {
+		norm[i] = cal.Normalize(raw)
+	}
+	m := NewMarkedBands(norm, margin)
+	m.SetCount(count, 0)
+	return m, cal
 }
 
 // SetHandler installs the event handler.
@@ -268,11 +288,7 @@ func (r *Router) PotReport(index, raw int) {
 
 	r.mu.Lock()
 	r.rawLast[index] = raw
-	cal := r.cfg.Calibration
-	if index == PotChannel {
-		cal = r.chanCal
-	}
-	norm := cal.Normalize(raw)
+	norm := r.cals[index].Normalize(raw)
 	pos := r.filters[index].Update(norm)
 	handler := r.handler
 
@@ -280,7 +296,7 @@ func (r *Router) PotReport(index, raw int) {
 		chEv   *ChannelSelect
 		modeEv *ModeSelect
 		volEv  *VolumeChange
-		resEv  *ReservedPotChange
+		audEv  *AudioOutputSelect
 	)
 	switch index {
 	case PotChannel:
@@ -302,10 +318,12 @@ func (r *Router) PotReport(index, raw int) {
 		if changed && r.cfg.VolumePotFitted {
 			volEv = &VolumeChange{Percent: pct, Physical: true}
 		}
-	default:
-		// TODO: pot 3 has no assigned function. It is still filtered and
-		// surfaced so a future feature can be added without touching this path.
-		resEv = &ReservedPotChange{Index: index, Position: pos}
+	case PotAudio:
+		if r.cfg.AudioPotFitted {
+			if band, changed := r.audio.Update(pos); changed && band >= 0 {
+				audEv = &AudioOutputSelect{Band: band, Position: pos}
+			}
+		}
 	}
 	r.mu.Unlock()
 
@@ -325,8 +343,9 @@ func (r *Router) PotReport(index, raw int) {
 	case volEv != nil:
 		r.log.Info("alarm volume knob moved", "percent", volEv.Percent)
 		handler.OnVolumeChange(*volEv)
-	case resEv != nil:
-		handler.OnReservedPot(*resEv)
+	case audEv != nil:
+		r.log.Info("audio knob selected band", "band", audEv.Band, "position", roundTo(audEv.Position, 3))
+		handler.OnAudioOutputSelect(*audEv)
 	}
 }
 
@@ -395,6 +414,7 @@ func (r *Router) Reset() {
 	}
 	r.bands.Reset()
 	r.modes.Reset()
+	r.audio.Reset()
 	r.volume.Reset()
 	for _, tr := range r.buttons {
 		tr.Reset()

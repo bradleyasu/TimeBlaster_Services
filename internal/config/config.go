@@ -259,6 +259,14 @@ type Input struct {
 	// anything past the first or last mark stays on it. Empty divides the
 	// knob's travel equally between the channels instead.
 	ChannelMarks []int `toml:"channel_marks"`
+	// AudioMarks calibrates the audio knob (pot 3), which switches the
+	// television's sound between HDMI and the USB speaker: the raw readings at
+	// the two ends of its travel, HDMI end first. Empty splits the pot's full
+	// travel in half, HDMI anticlockwise.
+	AudioMarks []int `toml:"audio_marks"`
+	// AudioPotFitted says whether the audio knob is wired; see
+	// ModePotFitted for why an unwired pin must not be trusted.
+	AudioPotFitted bool `toml:"audio_pot_fitted"`
 	// ModeKnob lists the television modes the mode knob (pot 2) selects
 	// between, in order from fully anticlockwise. The first is also the mode
 	// the Timeblaster starts in before the knob has reported. See ScreenModes.
@@ -565,6 +573,8 @@ func Default() Config {
 			ChannelHysteresis:     0.25,
 			VolumePotFitted:       true,
 			ChannelMarks:          []int{},
+			AudioMarks:            []int{},
+			AudioPotFitted:        true,
 			ModeKnob:              []string{ModeTV, ModeGuide, ModeAmbience},
 			ModePotFitted:         true,
 			VolumeDeadbandPercent: 2,
@@ -898,7 +908,12 @@ func (c Config) Validate() error {
 	if c.Input.HoldPollInterval.Duration <= 0 {
 		add("input.hold_poll_interval must be positive")
 	}
-	if err := validateChannelMarks(c.Input); err != nil {
+	if err := validateMarks("input.channel_marks", c.Input.ChannelMarks, c.Input); err != nil {
+		add("%v", err)
+	}
+	if n := len(c.Input.AudioMarks); n != 0 && n != 2 {
+		add("input.audio_marks needs exactly two readings, HDMI end then USB end, or none; got %d", n)
+	} else if err := validateMarks("input.audio_marks", c.Input.AudioMarks, c.Input); err != nil {
 		add("%v", err)
 	}
 	if len(c.Input.ModeKnob) == 0 {
@@ -1055,21 +1070,20 @@ func (c Config) Validate() error {
 // than this and ordinary pot noise could tip the dial from one to the other.
 const minMarkGap = 40
 
-// validateChannelMarks checks a channel dial calibration: at least two marks,
-// in order (either direction, for a pot that reads backwards), within the
-// ADC's range and far enough apart to tell apart.
-func validateChannelMarks(in Input) error {
-	marks := in.ChannelMarks
+// validateMarks checks a knob calibration: at least two marks, in order
+// (either direction, for a pot that reads backwards), within the ADC's range
+// and far enough apart to tell apart.
+func validateMarks(name string, marks []int, in Input) error {
 	if len(marks) == 0 {
 		return nil
 	}
 	if len(marks) < 2 {
-		return errors.New("input.channel_marks needs at least two marks, or none")
+		return fmt.Errorf("%s needs at least two marks, or none", name)
 	}
 	rising := marks[1] > marks[0]
 	for i, m := range marks {
 		if m < in.ADCMin || m > in.ADCMax {
-			return fmt.Errorf("input.channel_marks: mark %d reads %d, outside %d-%d", i+1, m, in.ADCMin, in.ADCMax)
+			return fmt.Errorf("%s: mark %d reads %d, outside %d-%d", name, i+1, m, in.ADCMin, in.ADCMax)
 		}
 		if i == 0 {
 			continue
@@ -1079,11 +1093,11 @@ func validateChannelMarks(in Input) error {
 			gap = -gap
 		}
 		if gap <= 0 {
-			return fmt.Errorf("input.channel_marks must run in one direction; mark %d (%d) breaks it", i+1, m)
+			return fmt.Errorf("%s must run in one direction; mark %d (%d) breaks it", name, i+1, m)
 		}
 		if gap < minMarkGap {
-			return fmt.Errorf("input.channel_marks: marks %d and %d are only %d apart; at least %d is needed to tell them apart",
-				i, i+1, gap, minMarkGap)
+			return fmt.Errorf("%s: marks %d and %d are only %d apart; at least %d is needed to tell them apart",
+				name, i, i+1, gap, minMarkGap)
 		}
 	}
 	return nil

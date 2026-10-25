@@ -162,9 +162,8 @@ type Inputs struct {
 	Raw []int `json:"raw"`
 	// ModeKnob is 0.0-1.0, or -1 when it has never reported.
 	ModeKnob float64 `json:"mode_knob"`
-	// ReservedKnobs is pot 3, currently unassigned.
-	// TODO: name it once pot 3 has a function.
-	ReservedKnobs []float64 `json:"reserved_knobs"`
+	// AudioKnob is 0.0-1.0, or -1 when it has never reported.
+	AudioKnob float64 `json:"audio_knob"`
 }
 
 // Health is the compact component report served at /api/health.

@@ -135,6 +135,28 @@ func (a *App) storedDisplayOn() bool {
 // Each change is written first and applied second, so a crash between the two
 // leaves the device with the setting the user asked for rather than the one it
 // happened to be using.
+// setTVAudioOutput switches where the television's sound goes, from the app's
+// switch or the audio knob alike, and reports whether anything changed.
+func (a *App) setTVAudioOutput(ctx context.Context, output string) (bool, error) {
+	a.audioOutMu.Lock()
+	defer a.audioOutMu.Unlock()
+	if output == a.storedTVAudioOutput() {
+		return false, nil
+	}
+	if err := a.store.SetSetting(storage.KeyTVAudioOutput, output); err != nil {
+		return false, err
+	}
+	a.applyTVAudioOutput(ctx)
+	// Reload whatever is on screen so the new device is actually used. See
+	// applyTVAudioOutput: a stream that is already playing keeps its dead
+	// audio output until the file is loaded again.
+	if a.screen != nil {
+		a.screen.RestorePlayback()
+	}
+	a.log.Info("television audio output changed", "output", output)
+	return true, nil
+}
+
 func (a *App) UpdateSettings(ctx context.Context, s web.Settings) (web.Settings, error) {
 	current := a.Settings()
 
@@ -211,17 +233,9 @@ func (a *App) UpdateSettings(ctx context.Context, s web.Settings) (web.Settings,
 			return web.Settings{}, fmt.Errorf("app: tv_audio_output must be %q or %q, got %q",
 				config.TVAudioHDMI, config.TVAudioSpeaker, s.TVAudioOutput)
 		}
-		if err := a.store.SetSetting(storage.KeyTVAudioOutput, s.TVAudioOutput); err != nil {
+		if _, err := a.setTVAudioOutput(ctx, s.TVAudioOutput); err != nil {
 			return web.Settings{}, err
 		}
-		a.applyTVAudioOutput(ctx)
-		// Reload whatever is on screen so the new device is actually used. See
-		// applyTVAudioOutput: a stream that is already playing keeps its dead
-		// audio output until the file is loaded again.
-		if a.screen != nil {
-			a.screen.RestorePlayback()
-		}
-		a.log.Info("television audio output changed", "output", s.TVAudioOutput)
 	}
 
 	if s.RemoteAccessEnabled != current.RemoteAccessEnabled {

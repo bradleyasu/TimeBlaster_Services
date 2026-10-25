@@ -373,9 +373,8 @@ func TestChangingTVAudioOutputReloadsPlayback(t *testing.T) {
 		t.Fatalf("UpdateSettings: %v", err)
 	}
 
-	if n := len(h.player.CallsNamed("loadfile")); n == 0 {
-		t.Error("playback was not reloaded, so the new device will not be used")
-	}
+	// The reload goes through the screen director, so it lands a moment later.
+	waitFor(t, "the reload", func() bool { return len(h.player.CallsNamed("loadfile")) > 0 })
 }
 
 // lastSetProperty returns the most recent value mpv was given for a property.

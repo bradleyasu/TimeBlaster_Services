@@ -171,6 +171,13 @@ volume_pot_fitted = true
 # equally between however many channels there are.
 channel_marks = []
 
+# The audio knob (pot 3) switches the television's sound between HDMI and the
+# USB speaker. Calibrate it to the ends of its travel: the raw reading at the
+# HDMI end, then at the USB end. Empty splits the pot's full travel in half,
+# HDMI anticlockwise. Set audio_pot_fitted false if pot 3 is not wired.
+audio_marks = []
+audio_pot_fitted = true
+
 # The mode knob (pot 2) chooses what the television is doing, and the channel
 # knob then chooses within that mode. Modes are listed from fully anticlockwise;
 # the first is also the mode used until the knob reports. Available: "tv"

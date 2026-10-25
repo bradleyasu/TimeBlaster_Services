@@ -75,15 +75,39 @@ func (a *App) OnVolumeChange(ev input.VolumeChange) {
 	}()
 }
 
-// OnReservedPot handles pot 3, which has no assigned function.
-//
-// TODO: assign a function to pot 3. The plumbing is complete — filtering,
-// calibration and event delivery all work — so implementing one is a matter of
-// adding a case here and, if it maps to discrete positions, a band mapper in the
-// input router. Candidates considered: TV/media volume, display brightness,
-// snooze duration, channel-overlay duration.
-func (a *App) OnReservedPot(ev input.ReservedPotChange) {
-	a.log.Debug("unassigned potentiometer moved", "index", ev.Index, "position", ev.Position)
+// OnAudioOutputSelect handles the audio knob: a two-position switch between
+// the television's HDMI sound and the USB speaker. It does exactly what the
+// companion app's switch does, and like the other knobs it is authoritative --
+// the app's choice holds only until the knob next moves.
+func (a *App) OnAudioOutputSelect(ev input.AudioOutputSelect) {
+	output := config.TVAudioHDMI
+	if ev.Band == 1 {
+		output = config.TVAudioSpeaker
+	}
+	// Off the input path: switching reloads the picture, which takes a moment.
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		changed, err := a.setTVAudioOutput(ctx, output)
+		if err != nil {
+			a.log.Warn("could not switch the television's audio from the knob", "output", output, "error", err)
+			return
+		}
+		// Only for a real change: the knob re-reports its position after every
+		// reconnect, and flashing the display then would be noise.
+		if changed {
+			a.flashNanoText(nanoAudioText(output), a.cfg.General.VolumeBanner.Duration)
+			a.publish(state.NewEvent(state.EventSettingsChanged, a.Settings()))
+		}
+	}()
+}
+
+// nanoAudioText names an audio output on the seven-segment display.
+func nanoAudioText(output string) string {
+	if output == config.TVAudioSpeaker {
+		return "USb"
+	}
+	return "HdMi"
 }
 
 // OnButton handles the two physical buttons.

@@ -69,11 +69,12 @@ All four are wired identically:
 | 0 | `A0` | **Channel.** Absolute position: the travel is divided into as many bands as the current mode has channels -- ErsatzTV channels in TV mode, ambience folders in ambience mode. |
 | 1 | `A1` | **Alarm speaker volume.** The knob is authoritative; software never overrides it for long. |
 | 2 | `A2` | **Mode.** Divided between the modes in `input.mode_knob`, by default TV, guide and ambience, in thirds from fully anticlockwise. |
-| 3 | `A3` | Reserved. **TODO:** unassigned. |
+| 3 | `A3` | **TV audio.** A two-position switch: one end sends the television's sound to HDMI, the other to the USB speaker -- the same choice as the companion app's TV audio setting. The display shows `HdMi` or `USb`. Calibrated to the ends of its travel with `input.audio_marks`. |
 
-Pot 3 is already filtered, calibrated and delivered to the application as a
-typed event; assigning it is a matter of adding a case in
-[`internal/app/router.go`](../internal/app/router.go).
+Like the channel knob, the audio knob can be calibrated to where its travel
+actually ends in the housing: `input.audio_marks` takes the raw readings at the
+HDMI end and the USB end (the app's state reports `inputs.raw`), and it switches
+at the midpoint between them, with hysteresis.
 
 ### Television modes
 
