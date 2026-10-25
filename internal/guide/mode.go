@@ -35,7 +35,7 @@ type TV interface {
 	HandlePlayerEvent(ev mpv.Event)
 	ChannelCount() int
 	Showing() screen.Showing
-	Guide(ctx context.Context, window time.Duration) (ersatztv.Guide, error)
+	GuideBetween(ctx context.Context, from, until time.Time) (ersatztv.Guide, error)
 }
 
 // Options configures the guide.
@@ -299,7 +299,10 @@ func (m *Mode) frame(ctx context.Context) Frame {
 	stale := m.fetchedAt.IsZero() || m.clock.Since(m.fetchedAt) >= m.opts.RefreshInterval
 	m.mu.Unlock()
 	if stale {
-		g, err := m.tv.Guide(ctx, 3*time.Hour)
+		// From the grid's first column, not from now: a programme that ended
+		// a few minutes ago is still in the half hour the grid starts at.
+		from := m.clock.Now().Truncate(slot)
+		g, err := m.tv.GuideBetween(ctx, from, from.Add(3*time.Hour))
 		m.mu.Lock()
 		// Tried either way: a down ErsatzTV is asked again in a minute, not
 		// every second.

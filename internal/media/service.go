@@ -163,7 +163,14 @@ func (s *Service) Guide(ctx context.Context, window time.Duration) (ersatztv.Gui
 	if window <= 0 {
 		window = 24 * time.Hour
 	}
+	now := s.clock.Now()
+	return s.GuideBetween(ctx, now, now.Add(window))
+}
 
+// GuideBetween returns the lineup paired with every programme overlapping
+// from..until. The TV guide's grid starts at the half hour, before now, and a
+// programme that has already finished still belongs in it.
+func (s *Service) GuideBetween(ctx context.Context, from, until time.Time) (ersatztv.Guide, error) {
 	s.guideMu.Lock()
 	cached, at, valid := s.guide, s.guideAt, s.guideValid
 	s.guideMu.Unlock()
@@ -185,8 +192,7 @@ func (s *Service) Guide(ctx context.Context, window time.Duration) (ersatztv.Gui
 		}
 	}
 
-	now := s.clock.Now()
-	return ersatztv.MergeGuide(s.Channels(), cached, now, now.Add(window)), nil
+	return ersatztv.MergeGuide(s.Channels(), cached, from, until), nil
 }
 
 // NewService builds the media service.

@@ -179,6 +179,7 @@ type fakeTV struct {
 	guide    ersatztv.Guide
 	guideErr error
 	guides   int
+	from     time.Time
 }
 
 func (f *fakeTV) log(s string) { f.mu.Lock(); f.calls = append(f.calls, s); f.mu.Unlock() }
@@ -204,10 +205,11 @@ func (f *fakeTV) Showing() screen.Showing {
 	defer f.mu.Unlock()
 	return screen.Showing{Number: f.playing}
 }
-func (f *fakeTV) Guide(context.Context, time.Duration) (ersatztv.Guide, error) {
+func (f *fakeTV) GuideBetween(_ context.Context, from, until time.Time) (ersatztv.Guide, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.guides++
+	f.from = from
 	return f.guide, f.guideErr
 }
 func (f *fakeTV) has(s string) bool {
@@ -570,5 +572,17 @@ func TestAProgrammeWithoutASynopsisShowsJustItsTitle(t *testing.T) {
 	}
 	if len(lines(ass, "}\"Fireman\"")) != 1 {
 		t.Error("the song title is missing")
+	}
+}
+
+func TestListingsAreReadFromTheGridsFirstColumn(t *testing.T) {
+	// At 9:42 the grid starts at 9:30. A programme that ran 9:00-9:35 is
+	// finished, but still belongs in the first column; asking for listings
+	// from now left that part of the grid empty.
+	f := newFixture(t, 3)
+	f.m.Activate()
+	_ = f.m.SelectBand(context.Background(), 0)
+	if want := at(21, 30); !f.tv.from.Equal(want) {
+		t.Errorf("listings read from %s, want the grid's start %s", f.tv.from.In(et).Format("15:04"), want.Format("15:04"))
 	}
 }
