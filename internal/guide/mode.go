@@ -84,7 +84,13 @@ type Mode struct {
 	page    int
 	pageAt  time.Time
 	playing string
+	// tuning is set from a channel change until its picture arrives.
+	tuning      bool
+	tuningSince time.Time
 }
+
+// maxTuning caps the corner's tuning card, for a stream that never starts.
+const maxTuning = 20 * time.Second
 
 var _ screen.Mode = (*Mode)(nil)
 
@@ -127,6 +133,7 @@ func (m *Mode) Activate() {
 	m.mu.Lock()
 	m.active = true
 	m.laidOut, m.drawn = false, ""
+	m.tuning = false
 	m.fetchedAt = time.Time{} // read fresh listings on the way in
 	m.mu.Unlock()
 	m.gate.Open()
@@ -172,7 +179,11 @@ func (m *Mode) SelectBand(ctx context.Context, band int) error {
 	if err := m.draw(ctx, true); err != nil {
 		return err
 	}
+	before := m.tv.Showing().Number
 	err := m.tv.SelectBand(ctx, band)
+	if now := m.tv.Showing().Number; now != before && now != "" {
+		m.startTuning()
+	}
 	m.draw(ctx, false) //nolint:errcheck // the highlight follows; a failure was logged
 	return err
 }
@@ -183,6 +194,9 @@ func (m *Mode) RestorePlayback(ctx context.Context) {
 	m.mu.Lock()
 	m.laidOut, m.drawn = false, ""
 	m.mu.Unlock()
+	if m.tv.Showing().Number != "" {
+		m.startTuning()
+	}
 	if err := m.draw(ctx, true); err != nil && !errors.Is(err, screen.ErrInactive) {
 		m.log.Warn("could not restore the guide after a player restart", "error", err)
 	}
@@ -191,9 +205,31 @@ func (m *Mode) RestorePlayback(ctx context.Context) {
 
 // HandlePlayerEvent goes to the TV's playback, which owns the corner video.
 func (m *Mode) HandlePlayerEvent(ev mpv.Event) {
-	if m.gate.IsOpen() {
-		m.tv.HandlePlayerEvent(ev)
+	if !m.gate.IsOpen() {
+		return
 	}
+	if ev.Name == "playback-restart" {
+		// The new channel's picture is up: uncover the corner at once rather
+		// than at the next second's redraw.
+		m.mu.Lock()
+		was := m.tuning
+		m.tuning = false
+		m.mu.Unlock()
+		if was {
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), m.opts.CommandTimeout)
+				defer cancel()
+				m.draw(ctx, false) //nolint:errcheck // the next second's redraw retries
+			}()
+		}
+	}
+	m.tv.HandlePlayerEvent(ev)
+}
+
+func (m *Mode) startTuning() {
+	m.mu.Lock()
+	m.tuning, m.tuningSince = true, m.clock.Now()
+	m.mu.Unlock()
 }
 
 // Run keeps the guide current -- the clock, the listings, the pages -- until
@@ -292,12 +328,16 @@ func (m *Mode) frame(ctx context.Context) Frame {
 		m.page = (m.page + 1) % pages
 		m.pageAt = m.clock.Now()
 	}
+	if m.tuning && m.clock.Since(m.tuningSince) >= maxTuning {
+		m.tuning = false
+	}
 	return Frame{
 		Now:      now,
 		Clock24h: m.opts.Clock24h(),
 		Channels: m.listings,
 		Playing:  playing,
 		Page:     m.page,
+		Tuning:   m.tuning,
 	}
 }
 

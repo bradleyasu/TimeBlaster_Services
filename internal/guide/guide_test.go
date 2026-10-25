@@ -410,3 +410,60 @@ func TestARestartedPlayerGetsTheLayoutBack(t *testing.T) {
 		t.Error("the guide or its picture was not restored")
 	}
 }
+
+func (f *fixture) lastDraw() string {
+	d := f.draws()
+	if len(d) == 0 {
+		return ""
+	}
+	return d[len(d)-1].Args[3].(string)
+}
+
+func TestTheCornerSaysTuningUntilThePictureArrives(t *testing.T) {
+	// mpv holds the old channel's last frame until the new one decodes. Under
+	// the new channel's listing, that frozen frame is the wrong programme.
+	f := newFixture(t, 3)
+	f.m.Activate()
+	_ = f.m.SelectBand(context.Background(), 2)
+	if len(lines(f.lastDraw(), "}TUNING…")) != 1 || len(lines(f.lastDraw(), "}CH 3")) != 1 {
+		t.Fatalf("no tuning card after a channel change:\n%s", f.lastDraw())
+	}
+	f.m.HandlePlayerEvent(mpv.Event{Name: "playback-restart"})
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && len(lines(f.lastDraw(), "}TUNING…")) != 0 {
+		time.Sleep(time.Millisecond)
+	}
+	if len(lines(f.lastDraw(), "}TUNING…")) != 0 {
+		t.Error("the tuning card stayed up after the picture arrived")
+	}
+	if !f.tv.has("event playback-restart") {
+		t.Error("the event did not reach the TV's playback")
+	}
+}
+
+func TestTheTuningCardGivesUpOnAStreamThatNeverStarts(t *testing.T) {
+	f := newFixture(t, 3)
+	f.m.Activate()
+	_ = f.m.SelectBand(context.Background(), 1)
+	f.clock.Advance(maxTuning)
+	_ = f.m.draw(context.Background(), false)
+	if len(lines(f.lastDraw(), "}TUNING…")) != 0 {
+		t.Error("the tuning card never came down")
+	}
+}
+
+func TestReselectingTheSameChannelDoesNotTune(t *testing.T) {
+	f := newFixture(t, 3)
+	f.m.Activate()
+	_ = f.m.SelectBand(context.Background(), 1)
+	f.m.HandlePlayerEvent(mpv.Event{Name: "playback-restart"})
+	f.m.mu.Lock()
+	f.m.tuning = false
+	f.m.mu.Unlock()
+	_ = f.m.SelectBand(context.Background(), 1)
+	f.m.mu.Lock()
+	defer f.m.mu.Unlock()
+	if f.m.tuning {
+		t.Error("the same channel again covered a picture that is already playing")
+	}
+}

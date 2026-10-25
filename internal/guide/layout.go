@@ -65,6 +65,10 @@ type Frame struct {
 	Playing string
 	// Page is which page of rows to show; it wraps.
 	Page int
+	// Tuning covers the corner while a new channel comes up. mpv holds the
+	// old channel's last frame until the new one decodes, which under the new
+	// channel's listing reads as the wrong programme.
+	Tuning bool
 }
 
 // Pages reports how many pages of rows the channels need.
@@ -98,6 +102,11 @@ func Render(f Frame) string {
 
 	renderPanel(&b, f)
 	renderGrid(&b, f)
+	if f.Tuning {
+		rect(&b, 0, 0, videoW, videoH, colBackground)
+		text(&b, videoW/2, videoH/2-24, 5, 56, colText, true, "CH "+f.Playing)
+		text(&b, videoW/2, videoH/2+36, 5, 28, colAccent, true, "TUNING…")
+	}
 	return strings.TrimSuffix(b.String(), "\n")
 }
 
