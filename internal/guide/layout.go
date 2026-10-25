@@ -110,35 +110,51 @@ func Render(f Frame) string {
 	return strings.TrimSuffix(b.String(), "\n")
 }
 
+// The top-right panel, laid out from the top: the name and the time on one
+// line, the date, then what is on the corner channel -- its title, the
+// episode, a synopsis of up to descLines lines, and when it airs.
+const (
+	panelX     = videoW + 36
+	panelRight = canvasW - 30
+	panelW     = panelRight - panelX
+	descSize   = 19
+	descLineH  = 23
+	descLines  = 5
+)
+
 // renderPanel draws the top right: the name, the time, and what is on the
 // channel in the corner.
 func renderPanel(b *strings.Builder, f Frame) {
-	x := videoW + 36
-	text(b, x, 26, 7, 30, colBrand, true, "TIMEBLASTER GUIDE")
-
-	clock, meridiem := clockText(f.Now, f.Clock24h)
-	text(b, x, 64, 7, 84, colText, true, clock)
-	if meridiem != "" {
-		text(b, x+int(float64(utf8.RuneCountInString(clock))*84*charWidth)+12, 104, 7, 36, colText, true, meridiem)
-	}
-	text(b, x, 166, 7, 26, colAccent, false, strings.ToUpper(f.Now.Format("Monday, Jan 2")))
+	x := panelX
+	text(b, x, 20, 7, 28, colBrand, true, "TIMEBLASTER GUIDE")
+	text(b, panelRight, 16, 9, 34, colText, true, timeText(f.Now, f.Clock24h))
+	text(b, x, 60, 7, 20, colAccent, false, strings.ToUpper(f.Now.Format("Monday, Jan 2")))
 
 	ch := find(f.Channels, f.Playing)
 	if ch == nil {
-		text(b, x, 230, 7, 24, colSubtle, false, "TURN THE CHANNEL KNOB")
+		text(b, x, 132, 7, 24, colSubtle, false, "TURN THE CHANNEL KNOB")
 		return
 	}
-	panelChars := chars(canvasW-x-30, 30)
-	text(b, x, 222, 7, 24, colAccent, true,
-		truncate(fmt.Sprintf("NOW ON %s  %s", ch.Number, strings.ToUpper(ch.Name)), chars(canvasW-x-30, 24)))
-	if p := current(ch.Programmes, f.Now); p != nil {
-		text(b, x, 258, 7, 30, colText, true, truncate(p.Title, panelChars))
-		text(b, x, 302, 7, 24, colSubtle, false,
-			fmt.Sprintf("%s - %s", timeText(p.Start.In(f.Now.Location()), f.Clock24h),
-				timeText(p.Stop.In(f.Now.Location()), f.Clock24h)))
-	} else {
-		text(b, x, 258, 7, 30, colSubtle, false, "NO LISTING")
+	text(b, x, 98, 7, 22, colAccent, true,
+		truncate(fmt.Sprintf("NOW ON %s  %s", ch.Number, strings.ToUpper(ch.Name)), chars(panelW, 22)))
+
+	p := current(ch.Programmes, f.Now)
+	if p == nil {
+		text(b, x, 132, 7, 28, colSubtle, false, "NO LISTING")
+		return
 	}
+	text(b, x, 130, 7, 28, colText, true, truncate(p.Title, chars(panelW, 28)))
+	y := 168
+	if p.SubTitle != "" {
+		text(b, x, y, 7, 22, colSubtle, false, truncate("\""+p.SubTitle+"\"", chars(panelW, 22)))
+		y += 32
+	}
+	for i, line := range wrap(p.Description, chars(panelW, descSize), descLines) {
+		text(b, x, y+i*descLineH, 7, descSize, colText, false, line)
+	}
+	text(b, x, 324, 7, 22, colSubtle, false,
+		fmt.Sprintf("%s - %s", timeText(p.Start.In(f.Now.Location()), f.Clock24h),
+			timeText(p.Stop.In(f.Now.Location()), f.Clock24h)))
 }
 
 // renderGrid draws the bottom half: time slots across, channels down.
@@ -242,6 +258,59 @@ func chars(width, size int) int {
 	return int(float64(width) / (float64(size) * charWidth))
 }
 
+// wrap breaks s into at most maxLines lines of at most width characters, at
+// word boundaries. Text that does not fit ends with "…" on the last line, cut
+// at a word where it can be. The guide's font is fixed-width, so a character
+// count is a width: there is no measuring to get wrong.
+func wrap(s string, width, maxLines int) []string {
+	words := strings.Fields(s)
+	if len(words) == 0 || width <= 1 || maxLines <= 0 {
+		return nil
+	}
+	var lines []string
+	var cur []rune
+	for _, w := range words {
+		r := []rune(w)
+		// A word longer than a whole line is split across lines.
+		for len(r) > width {
+			if len(cur) > 0 {
+				lines = append(lines, string(cur))
+				cur = nil
+			}
+			lines = append(lines, string(r[:width]))
+			r = r[width:]
+		}
+		switch {
+		case len(cur) == 0:
+			cur = r
+		case len(cur)+1+len(r) <= width:
+			cur = append(append(cur, ' '), r...)
+		default:
+			lines = append(lines, string(cur))
+			cur = r
+		}
+	}
+	if len(cur) > 0 {
+		lines = append(lines, string(cur))
+	}
+	if len(lines) <= maxLines {
+		return lines
+	}
+
+	// Too long: keep maxLines, and end the last with an ellipsis that fits.
+	lines = lines[:maxLines]
+	last := []rune(lines[maxLines-1])
+	for len(last)+1 > width {
+		if i := strings.LastIndex(string(last), " "); i > 0 {
+			last = []rune(string(last)[:i])
+		} else {
+			last = last[:width-1]
+		}
+	}
+	lines[maxLines-1] = strings.TrimRight(string(last), " ,;:-") + "…"
+	return lines
+}
+
 // truncate shortens s to n characters, marking the cut.
 func truncate(s string, n int) string {
 	s = strings.TrimSpace(s)
@@ -256,14 +325,6 @@ func truncate(s string, n int) string {
 		return string(r[:1])
 	}
 	return strings.TrimRight(string(r[:n-1]), " ") + "…"
-}
-
-// clockText renders the panel clock: "9:42" with "PM" beside it, or "21:42".
-func clockText(t time.Time, h24 bool) (string, string) {
-	if h24 {
-		return t.Format("15:04"), ""
-	}
-	return t.Format("3:04"), t.Format("PM")
 }
 
 // timeText renders a time in the grid: "9:30 PM" or "21:30".

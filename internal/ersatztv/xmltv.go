@@ -19,6 +19,9 @@ type Programme struct {
 	Title    string    `json:"title"`
 	SubTitle string    `json:"subTitle,omitempty"`
 	Category string    `json:"category,omitempty"`
+	// Description is the episode synopsis, with its whitespace collapsed to
+	// single spaces. Empty for most music videos.
+	Description string `json:"description,omitempty"`
 }
 
 // Duration is how long the programme runs.
@@ -70,6 +73,7 @@ type xmltvProgramme struct {
 	Title    string `xml:"title"`
 	SubTitle string `xml:"sub-title"`
 	Category string `xml:"category"`
+	Desc     string `xml:"desc"`
 }
 
 // xmltvLayouts are the timestamp forms XMLTV allows. ErsatzTV emits the first;
@@ -112,6 +116,9 @@ func ParseXMLTV(body []byte) (XMLTV, error) {
 			Title:    strings.TrimSpace(p.Title),
 			SubTitle: strings.TrimSpace(p.SubTitle),
 			Category: strings.TrimSpace(p.Category),
+			// Synopses arrive with the line breaks of whatever they were
+			// scraped from; they are reflowed for display anyway.
+			Description: strings.Join(strings.Fields(p.Desc), " "),
 		})
 	}
 	for id := range out.Programmes {

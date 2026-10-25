@@ -128,3 +128,27 @@ func TestMergeGuideWindowIncludesWhatIsOnNow(t *testing.T) {
 		t.Errorf("expected an empty window, got %d", n)
 	}
 }
+
+func TestParseXMLTVReadsDescriptions(t *testing.T) {
+	doc := `<?xml version="1.0"?><tv>` +
+		`<programme start="20261024220800 -0400" stop="20261024225000 -0400" channel="C1">` +
+		`<title>Law &amp; Order</title><sub-title>Avatar</sub-title>` +
+		"<desc>Detectives are troubled\n\n   to learn  that someone has taken a game too far.</desc></programme>" +
+		`<programme start="20261024225000 -0400" stop="20261024230000 -0400" channel="C1"><title>No synopsis</title></programme>` +
+		`</tv>`
+	x, err := ParseXMLTV([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ps := x.Programmes["C1"]
+	if len(ps) != 2 {
+		t.Fatalf("got %d programmes", len(ps))
+	}
+	// Reflowed: scraped synopses carry their source's line breaks.
+	if want := "Detectives are troubled to learn that someone has taken a game too far."; ps[0].Description != want {
+		t.Errorf("description %q, want %q", ps[0].Description, want)
+	}
+	if ps[1].Description != "" {
+		t.Errorf("a programme without a synopsis got %q", ps[1].Description)
+	}
+}

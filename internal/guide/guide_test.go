@@ -467,3 +467,108 @@ func TestReselectingTheSameChannelDoesNotTune(t *testing.T) {
 		t.Error("the same channel again covered a picture that is already playing")
 	}
 }
+
+func TestDescriptionsWrapAtWordsWithinTheWidth(t *testing.T) {
+	got := wrap("Detectives are troubled to learn that someone has taken an online game too far", 20, 5)
+	for _, l := range got {
+		if len([]rune(l)) > 20 {
+			t.Errorf("line wider than 20: %q", l)
+		}
+		if strings.HasPrefix(l, " ") || strings.HasSuffix(l, " ") {
+			t.Errorf("line with stray space: %q", l)
+		}
+	}
+	if strings.Join(got, " ") != "Detectives are troubled to learn that someone has taken an online game too far" {
+		t.Errorf("words were lost or broken: %q", got)
+	}
+}
+
+func TestALongDescriptionEndsWithAnEllipsis(t *testing.T) {
+	long := strings.Repeat("word ", 200)
+	got := wrap(long, 30, 5)
+	if len(got) != 5 {
+		t.Fatalf("%d lines, want 5", len(got))
+	}
+	last := got[4]
+	if !strings.HasSuffix(last, "…") || len([]rune(last)) > 30 {
+		t.Errorf("last line %q: want it cut with … within 30", last)
+	}
+	// A short one is left alone.
+	if got := wrap("Short.", 30, 5); len(got) != 1 || got[0] != "Short." {
+		t.Errorf("short text: %q", got)
+	}
+	// A word longer than a line is split rather than overflowing it.
+	for _, l := range wrap(strings.Repeat("x", 70), 30, 5) {
+		if len([]rune(l)) > 30 {
+			t.Errorf("an unbroken word overflowed: %q", l)
+		}
+	}
+}
+
+func panelFrame(p ersatztv.Programme) Frame {
+	return Frame{Now: at(22, 30), Playing: "1", Channels: []ersatztv.GuideChannel{
+		{Number: "1", Name: "Crime TV", Programmes: []ersatztv.Programme{p}}}}
+}
+
+func TestThePanelShowsTheEpisodeAndItsSynopsis(t *testing.T) {
+	p := prog("Law & Order: Special Victims Unit", 22, 8, 22, 50)
+	p.SubTitle = "Avatar"
+	p.Description = "Detectives are troubled to learn that someone has taken an online game too far when a girl goes missing."
+	ass := Render(panelFrame(p))
+
+	if len(lines(ass, "}\"Avatar\"")) != 1 {
+		t.Errorf("no episode title:\n%s", ass)
+	}
+	desc := lines(ass, fmt.Sprintf("\\fs%d\\b0\\c%s", descSize, assColor(colText)))
+	if len(desc) < 2 {
+		t.Fatalf("the synopsis is not wrapped onto lines: %d lines", len(desc))
+	}
+	var shown []string
+	for _, l := range desc {
+		s := l[strings.LastIndex(l, "}")+1:]
+		if len([]rune(s)) > chars(panelW, descSize) {
+			t.Errorf("a synopsis line is wider than the panel: %q", s)
+		}
+		shown = append(shown, s)
+	}
+	if strings.Join(shown, " ") != p.Description {
+		t.Errorf("the synopsis does not read through: %q", shown)
+	}
+	if len(lines(ass, "}10:08 PM - 10:50 PM")) != 1 {
+		t.Error("the time slot is missing")
+	}
+}
+
+func TestTheSynopsisNeverRunsIntoTheTimeSlot(t *testing.T) {
+	// A long synopsis is cut at five lines, which end above the time slot.
+	p := prog("Criminal Minds", 22, 0, 23, 0)
+	p.SubTitle = "No Way Out (1)"
+	p.Description = strings.Repeat("Gideon is pitted against the scariest and most evil murderer of his career. ", 14)
+	ass := Render(panelFrame(p))
+	desc := lines(ass, fmt.Sprintf("\\fs%d\\b0\\c%s", descSize, assColor(colText)))
+	if len(desc) != descLines {
+		t.Fatalf("%d synopsis lines, want %d", len(desc), descLines)
+	}
+	if !strings.HasSuffix(desc[len(desc)-1], "…") {
+		t.Error("a cut synopsis is not marked")
+	}
+	// Each line's top is in its \pos; the last must clear the time slot.
+	var y int
+	fmt.Sscanf(desc[len(desc)-1][strings.Index(desc[len(desc)-1], "\\pos("):], "\\pos(%d,%d)", new(int), &y)
+	if y+descLineH > 324 {
+		t.Errorf("the last synopsis line (top %d) runs into the time slot at 324", y)
+	}
+}
+
+func TestAProgrammeWithoutASynopsisShowsJustItsTitle(t *testing.T) {
+	// Most music videos: a title and a song, no synopsis.
+	p := prog("JawbreakerVEVO", 22, 28, 22, 32)
+	p.SubTitle = "Fireman"
+	ass := Render(panelFrame(p))
+	if n := len(lines(ass, fmt.Sprintf("\\fs%d\\b0\\c%s", descSize, assColor(colText)))); n != 0 {
+		t.Errorf("%d synopsis lines for a programme without one", n)
+	}
+	if len(lines(ass, "}\"Fireman\"")) != 1 {
+		t.Error("the song title is missing")
+	}
+}
