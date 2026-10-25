@@ -65,17 +65,27 @@ type Config struct {
 	WiFi     WiFi     `toml:"wifi"`
 	Firmware Firmware `toml:"firmware"`
 	Ambience Ambience `toml:"ambience"`
+	Guide    Guide    `toml:"guide"`
+}
+
+// Guide configures the guide mode: the listings, with the channel the channel
+// knob points at playing in the corner.
+type Guide struct {
+	// PageInterval is how long each page of channels stays up, when there are
+	// more channels than fit at once.
+	PageInterval Duration `toml:"page_interval"`
 }
 
 // Television modes, by the IDs the mode knob is configured with.
 const (
 	ModeTV       = "tv"
+	ModeGuide    = "guide"
 	ModeAmbience = "ambience"
 )
 
 // ScreenModes is every mode the daemon can build. Adding a mode means
 // implementing screen.Mode and adding its ID here.
-var ScreenModes = []string{ModeTV, ModeAmbience}
+var ScreenModes = []string{ModeTV, ModeGuide, ModeAmbience}
 
 // Ambience configures the ambience mode: looping local videos, chosen with the
 // channel knob.
@@ -549,7 +559,7 @@ func Default() Config {
 			ChannelHysteresis:     0.25,
 			VolumePotFitted:       true,
 			ChannelMarks:          []int{},
-			ModeKnob:              []string{ModeTV, ModeAmbience},
+			ModeKnob:              []string{ModeTV, ModeGuide, ModeAmbience},
 			ModePotFitted:         true,
 			VolumeDeadbandPercent: 2,
 			WiFiHoldDuration:      Dur(5 * time.Second),
@@ -694,6 +704,7 @@ func Default() Config {
 			ValidateTimeout: Dur(30 * time.Second),
 			ScanTimeout:     Dur(20 * time.Second),
 		},
+		Guide: Guide{PageInterval: Dur(8 * time.Second)},
 		Ambience: Ambience{
 			// Not under /var/lib/timeblaster, which only the service account
 			// can enter: videos are large, and copying them in should be a
@@ -891,6 +902,10 @@ func (c Config) Validate() error {
 			add("input.mode_knob lists %q twice", m)
 		}
 		seenModes[m] = true
+	}
+
+	if c.Guide.PageInterval.Duration < time.Second {
+		add("guide.page_interval must be at least a second")
 	}
 
 	// ambience

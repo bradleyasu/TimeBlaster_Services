@@ -172,7 +172,7 @@ func TestTheSnapshotListsModesInKnobOrder(t *testing.T) {
 	for _, m := range h.app.Snapshot().Screen.Modes {
 		ids = append(ids, m.ID)
 	}
-	if !slices.Equal(ids, []string{"tv", "ambience"}) {
+	if !slices.Equal(ids, []string{"tv", "guide", "ambience"}) {
 		t.Errorf("modes %v", ids)
 	}
 	if n := len(h.app.Snapshot().Screen.AmbienceChannels); n != 2 {

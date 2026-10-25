@@ -480,3 +480,7 @@ func formatOverlayText(format, number, name string) string {
 		return fmt.Sprintf(format, number, name)
 	}
 }
+
+// EscapeASS neutralises ASS markup in text from outside the program, such as
+// programme titles, for callers drawing their own overlays.
+func EscapeASS(s string) string { return escapeASS(s) }

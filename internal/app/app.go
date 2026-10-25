@@ -18,6 +18,7 @@ import (
 	"github.com/bradsheets/timeblaster/internal/audio"
 	"github.com/bradsheets/timeblaster/internal/config"
 	"github.com/bradsheets/timeblaster/internal/ersatztv"
+	"github.com/bradsheets/timeblaster/internal/guide"
 	"github.com/bradsheets/timeblaster/internal/hardware"
 	"github.com/bradsheets/timeblaster/internal/input"
 	"github.com/bradsheets/timeblaster/internal/media"
@@ -74,6 +75,7 @@ type App struct {
 	overlay  *mpv.OverlayRenderer
 	media    *media.Service
 	ambience *ambience.Mode
+	guide    *guide.Mode
 	// screen switches the television between modes. Nil without a player.
 	screen *screen.Director
 	// wantMode is the mode knob's choice, as an index into the knob's modes.
@@ -542,6 +544,9 @@ func (a *App) registerTasks() {
 	}
 	if a.ambience != nil {
 		a.sup.add("ambience", false, a.ambience.Run)
+	}
+	if a.guide != nil {
+		a.sup.add("guide", false, a.guide.Run)
 	}
 	a.sup.add("screen", false, a.runScreen)
 	a.sup.add("clock-broadcast", false, a.runClockBroadcast)

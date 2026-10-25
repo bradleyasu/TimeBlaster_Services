@@ -467,11 +467,14 @@
       renderAmbience(list, screen);
       return;
     }
-    if (mode !== 'tv') {
+    if (mode !== 'tv' && mode !== 'guide') {
       $('tv-hint').textContent = 'Turn the mode knob to TV to choose a channel here.';
       return;
     }
-    $('tv-hint').textContent = 'The channel knob on the Timeblaster is authoritative. ' +
+    $('tv-hint').textContent = (mode === 'guide'
+      ? 'The guide is on. The channel you choose plays in its corner. '
+      : '') +
+      'The channel knob on the Timeblaster is authoritative. ' +
       'Choosing here holds until the knob is next moved.';
 
     var channels = (state && state.channels) || [];

@@ -171,7 +171,7 @@ func TestValidateFieldRanges(t *testing.T) {
 		{"marks too close", func(c *Config) { c.Input.ChannelMarks = []int{900, 920, 1500} }, "apart"},
 		{"mark beyond the ADC", func(c *Config) { c.Input.ChannelMarks = []int{900, 5000} }, "outside"},
 		{"no modes", func(c *Config) { c.Input.ModeKnob = nil }, "mode_knob"},
-		{"unknown mode", func(c *Config) { c.Input.ModeKnob = []string{"tv", "guide"} }, "mode_knob"},
+		{"unknown mode", func(c *Config) { c.Input.ModeKnob = []string{"tv", "teletext"} }, "mode_knob"},
 		// Two bands of the knob leading to the same mode would be a dead zone
 		// that looks like a broken knob.
 		{"duplicate mode", func(c *Config) { c.Input.ModeKnob = []string{"tv", "ambience", "tv"} }, "twice"},

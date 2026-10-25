@@ -3,12 +3,15 @@ package app
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/bradsheets/timeblaster/internal/ambience"
 	"github.com/bradsheets/timeblaster/internal/config"
+	"github.com/bradsheets/timeblaster/internal/guide"
 	"github.com/bradsheets/timeblaster/internal/input"
 	"github.com/bradsheets/timeblaster/internal/screen"
 	"github.com/bradsheets/timeblaster/internal/state"
+	"github.com/bradsheets/timeblaster/internal/storage"
 )
 
 // This file is the policy for the two knobs that decide what is on the
@@ -32,8 +35,22 @@ func (a *App) initScreen() error {
 		Logger: a.log.With("component", "ambience"), Observer: a,
 	})
 
+	a.guide = guide.New(guide.Options{
+		PageInterval:   a.cfg.Guide.PageInterval.Duration,
+		CommandTimeout: a.cfg.MPV.CommandTimeout.Duration,
+		// Read on every draw, so the guide follows the settings as they change.
+		Clock24h: func() bool {
+			return storage.GetBool(a.store, storage.KeyClock24h, a.cfg.General.Clock24h)
+		},
+		Location: func() *time.Location { return a.scheduler.Location() },
+	}, guide.Deps{
+		Player: a.tvPlayer, TV: a.media, Clock: a.clock,
+		Logger: a.log.With("component", "guide"),
+	})
+
 	available := map[string]screen.Mode{
 		config.ModeTV:       a.media,
+		config.ModeGuide:    a.guide,
 		config.ModeAmbience: a.ambience,
 	}
 	var modes []screen.Mode

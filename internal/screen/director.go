@@ -48,13 +48,13 @@ func NewDirector(modes []Mode, log *slog.Logger, obs Observer) *Director {
 	if len(modes) == 0 {
 		panic("screen: a director needs at least one mode")
 	}
-	for i, m := range modes {
-		if i == 0 {
-			m.Activate()
-		} else {
-			m.Deactivate()
-		}
+	// Everything else first, the first mode last: modes may share machinery
+	// -- the guide borrows the TV's playback -- and the one that ends up
+	// active must be the last to touch it.
+	for _, m := range modes[1:] {
+		m.Deactivate()
 	}
+	modes[0].Activate()
 	return &Director{
 		modes:   modes,
 		log:     log,

@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bradsheets/timeblaster/internal/config"
@@ -100,6 +101,10 @@ type Service struct {
 	// gate admits player work only while this is the active television mode.
 	// Every load, and the bookkeeping that records it, happens inside it.
 	gate screen.Gate
+	// quiet suppresses the channel banner, for when another mode presents
+	// this service's picture in its own frame -- the guide, whose corner
+	// video would otherwise be covered by a full-screen tuning card.
+	quiet atomic.Bool
 
 	mu       sync.RWMutex
 	observer Observer
@@ -239,6 +244,9 @@ func (s *Service) Deactivate() {
 		cancel()
 	}
 }
+
+// SetQuiet turns the channel banner off or back on.
+func (s *Service) SetQuiet(quiet bool) { s.quiet.Store(quiet) }
 
 // Showing reports the selected channel.
 func (s *Service) Showing() screen.Showing {
@@ -475,7 +483,7 @@ func (s *Service) SelectChannel(ctx context.Context, ch ersatztv.Channel) error 
 		//
 		// The overlay is cosmetic: a failure must not turn a successful
 		// channel change into an error.
-		if s.overlay != nil {
+		if s.overlay != nil && !s.quiet.Load() {
 			if err := s.overlay.ShowChannel(ctx, ch.Number, ch.Name); err != nil {
 				s.log.Debug("could not draw the channel overlay", "error", err)
 			}

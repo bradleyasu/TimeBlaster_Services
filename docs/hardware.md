@@ -68,7 +68,7 @@ All four are wired identically:
 | --- | --- | --- |
 | 0 | `A0` | **Channel.** Absolute position: the travel is divided into as many bands as the current mode has channels -- ErsatzTV channels in TV mode, ambience folders in ambience mode. |
 | 1 | `A1` | **Alarm speaker volume.** The knob is authoritative; software never overrides it for long. |
-| 2 | `A2` | **Mode.** Divided between the modes in `input.mode_knob`, by default TV (anticlockwise half) and ambience (clockwise half). |
+| 2 | `A2` | **Mode.** Divided between the modes in `input.mode_knob`, by default TV, guide and ambience, in thirds from fully anticlockwise. |
 | 3 | `A3` | Reserved. **TODO:** unassigned. |
 
 Pot 3 is already filtered, calibrated and delivered to the application as a
@@ -82,6 +82,12 @@ within it. Turning the mode knob re-divides the channel knob for the new mode an
 shows whichever channel it now points at.
 
 * **TV** -- ErsatzTV channels, as before. The display shows `Ch.02`.
+* **Guide** -- the listings, like the old cable guide channel. The channel the
+  channel knob points at plays in the top-left quarter; the rest of the screen
+  shows the time, what is on that channel now, and a 90-minute grid of every
+  channel, five at a time, turning the page every 8 seconds
+  (`guide.page_interval`). Changing channel jumps to its page. The display
+  shows `Ch.02`, as in TV mode.
 * **Ambience** -- looping local videos. Each channel is a numbered folder under
   `/srv/timeblaster/ambient` (`ambience.dir`):
 

@@ -316,7 +316,10 @@ func (a *App) ChannelListChanged(channels []ersatztv.Channel) {
 	//
 	// Exactly one request follows, which is the point: this used to both ask
 	// the knob and separately decide for itself, and the two raced.
+	// The guide's channel knob picks a TV channel for its corner, so the list
+	// is the guide's as well.
 	a.modeChannelsChanged(config.ModeTV)
+	a.modeChannelsChanged(config.ModeGuide)
 
 	a.publish(state.NewEvent(state.EventChannelsChanged, channels))
 }
