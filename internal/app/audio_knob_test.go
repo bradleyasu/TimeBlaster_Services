@@ -87,3 +87,28 @@ func runAsync(h *harness) {
 	_ = h
 	time.Sleep(50 * time.Millisecond)
 }
+
+func TestTheAudioSwitchIsNotHiddenByTheChannelReloading(t *testing.T) {
+	// Switching the output reloads the channel so the new device is used.
+	// The reload is the same channel: flashing its number again buried the
+	// HdMi the viewer had just turned the knob to see.
+	h := newHarness(t, nil)
+	h.syncChannels(t)
+	h.app.router.PotReport(input.PotAudio, 300)
+	h.app.router.PotReport(input.PotChannel, 400)
+	waitFor(t, "channel 1", func() bool { return displayed(h, "Ch.01") })
+	h.nano.Reset()
+	loads := len(h.player.CallsNamed("loadfile"))
+
+	h.app.router.PotReport(input.PotAudio, 3800)
+	waitFor(t, "USb", func() bool { return displayed(h, "USb") })
+	waitFor(t, "the reload", func() bool { return len(h.player.CallsNamed("loadfile")) > loads })
+	runAsync(h)
+	if displayed(h, "Ch.01") {
+		t.Error("the reload of the same channel flashed its number over USb")
+	}
+
+	// A real channel change still announces itself.
+	h.app.router.PotReport(input.PotChannel, 3800)
+	waitFor(t, "channel 4", func() bool { return displayed(h, "Ch.04") })
+}
