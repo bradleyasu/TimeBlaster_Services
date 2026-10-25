@@ -133,6 +133,10 @@ type Service struct {
 	reloadChannel  string
 	reloadFailures int
 	reloadLastAt   time.Time
+	// started records that the selected channel has produced a picture since
+	// it was last loaded. Until it has, the watchdog allows it the longer
+	// start-up time rather than calling it stalled.
+	started bool
 
 	// guide caches the parsed XMLTV document. It is a few hundred kilobytes of
 	// XML describing two days of scheduling, so re-fetching it for every phone
@@ -512,6 +516,7 @@ func (s *Service) SelectChannel(ctx context.Context, ch ersatztv.Channel) error 
 		s.current = &ch
 		s.shownImage = ""
 		s.lastErr = nil
+		s.started = false
 		s.mu.Unlock()
 		return nil
 	})
@@ -667,6 +672,7 @@ func (s *Service) HandlePlayerEvent(ev mpv.Event) {
 		s.mu.Lock()
 		s.reloadChannel = ""
 		s.reloadFailures = 0
+		s.started = true
 		s.mu.Unlock()
 		if s.overlay != nil {
 			s.overlay.PlaybackStarted()
@@ -812,6 +818,11 @@ func (s *Service) WatchPlayback(ctx context.Context) error {
 		interval = timeout / 4
 	}
 
+	startTimeout := s.mpvCfg.StallStartTimeout.Duration
+	if startTimeout < timeout {
+		startTimeout = timeout
+	}
+
 	var (
 		lastPos     float64
 		lastChannel string
@@ -829,6 +840,7 @@ func (s *Service) WatchPlayback(ctx context.Context) error {
 
 		s.mu.RLock()
 		current := s.current
+		started := s.started
 		s.mu.RUnlock()
 
 		// Nothing to stall: a static image has no playback position, and its
@@ -867,7 +879,13 @@ func (s *Service) WatchPlayback(ctx context.Context) error {
 			}
 		}
 
-		if s.clock.Since(movedAt) < timeout {
+		// A channel still waiting for its first picture is starting, not
+		// stalled, and gets the longer allowance.
+		limit := timeout
+		if !started {
+			limit = startTimeout
+		}
+		if s.clock.Since(movedAt) < limit {
 			continue
 		}
 

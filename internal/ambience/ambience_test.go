@@ -175,7 +175,8 @@ func newFixture(t *testing.T, files ...string) *fixture {
 	m := New(Options{
 		Dir: root, RescanInterval: 30 * time.Second, StandbyImage: "/standby.png",
 		BannerDuration: 3 * time.Second, StallTimeout: 12 * time.Second,
-		StallCheckInterval: 2 * time.Second, CommandTimeout: time.Second,
+		StallCheckInterval: 2 * time.Second, StallStartTimeout: 45 * time.Second,
+		CommandTimeout: time.Second,
 	}, Deps{
 		Player: player, Overlay: mpv.NewOverlayRenderer(cfg.Overlay, player, clk, discard()),
 		Clock: clk, Logger: discard(), Observer: obs,
@@ -443,5 +444,27 @@ func TestAPausedVideoIsNotAStall(t *testing.T) {
 	f.m.checkStall(ctx, &st)
 	if n := len(f.loads()); n != 1 {
 		t.Errorf("a paused video was reloaded: %v", f.loads())
+	}
+}
+
+func TestAVideoStillStartingIsNotAStall(t *testing.T) {
+	// No picture yet: the longer start-up allowance applies, as for the TV.
+	f := newFixture(t, "ch1/fire.mp4")
+	_ = f.m.SelectBand(context.Background(), 0)
+	f.player.SetProp("time-pos", 0.0)
+
+	ctx := context.Background()
+	var st stallState
+	f.m.checkStall(ctx, &st)
+	f.m.checkStall(ctx, &st)
+	f.clock.Advance(30 * time.Second)
+	f.m.checkStall(ctx, &st)
+	if n := len(f.loads()); n != 1 {
+		t.Fatalf("a video still starting was reloaded after 30s: %v", f.loads())
+	}
+	f.clock.Advance(20 * time.Second)
+	f.m.checkStall(ctx, &st)
+	if n := len(f.loads()); n != 2 {
+		t.Errorf("a video that never started was never reloaded: %v", f.loads())
 	}
 }

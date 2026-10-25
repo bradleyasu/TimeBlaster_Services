@@ -50,9 +50,11 @@ type Options struct {
 	// BannerDuration is how long the channel banner stays up.
 	BannerDuration time.Duration
 	// StallTimeout and StallCheckInterval drive the stall watchdog, as for
-	// the TV. A zero timeout disables it.
+	// the TV. A zero timeout disables it. StallStartTimeout is the longer
+	// allowance before a video's first picture.
 	StallTimeout       time.Duration
 	StallCheckInterval time.Duration
+	StallStartTimeout  time.Duration
 	CommandTimeout     time.Duration
 }
 
@@ -536,9 +538,14 @@ func (m *Mode) checkStall(ctx context.Context, st *stallState) {
 	gen := m.gen
 	var key string
 	var idx int
+	stallAfter := m.opts.StallTimeout
 	if p != nil {
 		idx = p.idx
 		key = fmt.Sprintf("%d/%d", gen, idx)
+		if !p.started && m.opts.StallStartTimeout > stallAfter {
+			// Not stalled, starting: the longer allowance, as for the TV.
+			stallAfter = m.opts.StallStartTimeout
+		}
 	}
 	m.mu.Unlock()
 
@@ -566,7 +573,7 @@ func (m *Mode) checkStall(ctx context.Context, st *stallState) {
 			return
 		}
 	}
-	if now.Sub(st.movedAt) < m.opts.StallTimeout {
+	if now.Sub(st.movedAt) < stallAfter {
 		return
 	}
 

@@ -385,6 +385,12 @@ type MPV struct {
 	// to disable the check.
 	StallTimeout       Duration `toml:"stall_timeout"`
 	StallCheckInterval Duration `toml:"stall_check_interval"`
+	// StallStartTimeout is the allowance before a freshly loaded channel's
+	// first picture. A channel that has not started yet is not stalled:
+	// ErsatzTV can need well over StallTimeout to cold-start one, and holding
+	// it to the shorter limit reloaded channels just as they were arriving,
+	// which only made them slower.
+	StallStartTimeout Duration `toml:"stall_start_timeout"`
 	// CommandTimeout bounds a single IPC request.
 	CommandTimeout Duration `toml:"command_timeout"`
 }
@@ -665,6 +671,7 @@ func Default() Config {
 			// viewer is not left staring at a frozen frame.
 			StallTimeout:       Dur(12 * time.Second),
 			StallCheckInterval: Dur(2 * time.Second),
+			StallStartTimeout:  Dur(45 * time.Second),
 		},
 		Overlay: Overlay{
 			Enabled:    true,
@@ -819,6 +826,10 @@ func (c Config) Validate() error {
 	}
 	if c.MPV.StallTimeout.Duration < 0 {
 		add("mpv.stall_timeout must not be negative")
+	}
+	if c.MPV.StallTimeout.Duration > 0 && c.MPV.StallStartTimeout.Duration < c.MPV.StallTimeout.Duration {
+		add("mpv.stall_start_timeout (%s) must be at least mpv.stall_timeout (%s)",
+			c.MPV.StallStartTimeout, c.MPV.StallTimeout)
 	}
 	if c.MPV.StallTimeout.Duration > 0 &&
 		c.MPV.StallCheckInterval.Duration >= c.MPV.StallTimeout.Duration {

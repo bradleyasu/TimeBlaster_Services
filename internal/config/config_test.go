@@ -170,6 +170,7 @@ func TestValidateFieldRanges(t *testing.T) {
 		{"marks out of order", func(c *Config) { c.Input.ChannelMarks = []int{900, 1400, 1200} }, "one direction"},
 		{"marks too close", func(c *Config) { c.Input.ChannelMarks = []int{900, 920, 1500} }, "apart"},
 		{"mark beyond the ADC", func(c *Config) { c.Input.ChannelMarks = []int{900, 5000} }, "outside"},
+		{"start allowance shorter than a stall", func(c *Config) { c.MPV.StallStartTimeout = Dur(5 * time.Second) }, "stall_start_timeout"},
 		{"no modes", func(c *Config) { c.Input.ModeKnob = nil }, "mode_knob"},
 		{"unknown mode", func(c *Config) { c.Input.ModeKnob = []string{"tv", "teletext"} }, "mode_knob"},
 		// Two bands of the knob leading to the same mode would be a dead zone

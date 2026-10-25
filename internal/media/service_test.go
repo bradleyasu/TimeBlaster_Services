@@ -1015,6 +1015,9 @@ func TestWatchdogReloadsPlaybackThatStopsAdvancing(t *testing.T) {
 	if err := f.svc.SelectBand(ctx, 0); err != nil {
 		t.Fatal(err)
 	}
+	// The picture arrived, then froze: the freeze this exists for happens to
+	// a channel that was playing, not to one still starting.
+	f.svc.HandlePlayerEvent(mpv.Event{Name: "playback-restart"})
 	healthyPlayback(f, 42.0) // and never advances again
 	f.player.Reset()
 
@@ -1023,6 +1026,7 @@ func TestWatchdogReloadsPlaybackThatStopsAdvancing(t *testing.T) {
 
 	// Drive the fake clock until the stall is acted on. The overlay also holds
 	// timers, so counting advances is not the same as counting watchdog checks.
+	start := f.clock.Now()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		if len(f.player.CallsNamed("loadfile")) > 0 {
@@ -1034,6 +1038,10 @@ func TestWatchdogReloadsPlaybackThatStopsAdvancing(t *testing.T) {
 	loads := f.player.CallsNamed("loadfile")
 	if len(loads) == 0 {
 		t.Fatal("a frozen channel was never reloaded")
+	}
+	// Within the stall timeout and a check or two, not the start-up allowance.
+	if took := f.clock.Since(start); took >= config.Default().MPV.StallStartTimeout.Duration {
+		t.Errorf("a channel that froze after playing took %s to recover", took)
 	}
 	if url, _ := loads[0].Args[1].(string); !strings.Contains(url, "/channel/1.") {
 		t.Errorf("reloaded the wrong thing: %q", url)
@@ -1164,5 +1172,48 @@ func TestWatchdogCanBeDisabled(t *testing.T) {
 	}
 	if n := len(f.player.CallsNamed("loadfile")); n != 0 {
 		t.Errorf("a disabled watchdog reloaded %d times", n)
+	}
+}
+
+func TestWatchdogGivesAStartingChannelTimeToArrive(t *testing.T) {
+	// ErsatzTV can need well over the stall timeout to cold-start a channel.
+	// Reloading it at 12 seconds restarted the wait just as the picture was
+	// about to arrive: the watchdog made slow channels slower.
+	f := newFixture(t, chans()...)
+	ctx := context.Background()
+	if err := f.svc.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.SelectBand(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	healthyPlayback(f, 0) // no picture yet: the position sits at zero
+	f.player.Reset()
+
+	stop := runWatchdog(t, f)
+	defer stop()
+
+	cfg := config.Default().MPV
+	start := f.clock.Now()
+	// Well past the stall timeout, but short of the start-up allowance.
+	for f.clock.Since(start) < cfg.StallStartTimeout.Duration-2*cfg.StallCheckInterval.Duration {
+		waitForWaiter(t, f.clock)
+		f.clock.Advance(cfg.StallCheckInterval.Duration)
+	}
+	if got := watchdogChecks(f); got < 10 {
+		t.Fatalf("the watchdog only checked %d times; the test proved nothing", got)
+	}
+	if n := len(f.player.CallsNamed("loadfile")); n != 0 {
+		t.Fatalf("a channel still starting was reloaded after %s", f.clock.Since(start))
+	}
+
+	// One that never starts at all is still recovered, just later.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && len(f.player.CallsNamed("loadfile")) == 0 {
+		waitForWaiter(t, f.clock)
+		f.clock.Advance(cfg.StallCheckInterval.Duration)
+	}
+	if len(f.player.CallsNamed("loadfile")) == 0 {
+		t.Error("a channel that never started was never reloaded")
 	}
 }

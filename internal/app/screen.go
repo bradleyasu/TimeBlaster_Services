@@ -29,6 +29,7 @@ func (a *App) initScreen() error {
 		BannerDuration:     a.cfg.Overlay.Duration.Duration,
 		StallTimeout:       a.cfg.MPV.StallTimeout.Duration,
 		StallCheckInterval: a.cfg.MPV.StallCheckInterval.Duration,
+		StallStartTimeout:  a.cfg.MPV.StallStartTimeout.Duration,
 		CommandTimeout:     a.cfg.MPV.CommandTimeout.Duration,
 	}, ambience.Deps{
 		Player: a.tvPlayer, Overlay: a.overlay, Clock: a.clock,
