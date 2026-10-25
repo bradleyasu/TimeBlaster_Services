@@ -243,6 +243,12 @@ type Input struct {
 	// design. Set this false until the knob is wired, or the volume will drift
 	// on its own -- and a drifting alarm volume is a missed alarm.
 	VolumePotFitted bool `toml:"volume_pot_fitted"`
+	// ChannelMarks calibrates the channel knob to the printed marks on its
+	// dial: the raw reading measured with the dial on each mark, mark 1 first.
+	// The knob then selects the nearest mark, mark k is channel k, and
+	// anything past the first or last mark stays on it. Empty divides the
+	// knob's travel equally between the channels instead.
+	ChannelMarks []int `toml:"channel_marks"`
 	// ModeKnob lists the television modes the mode knob (pot 2) selects
 	// between, in order from fully anticlockwise. The first is also the mode
 	// the Timeblaster starts in before the knob has reported. See ScreenModes.
@@ -542,6 +548,7 @@ func Default() Config {
 			FilterSnapThreshold:   0.08,
 			ChannelHysteresis:     0.25,
 			VolumePotFitted:       true,
+			ChannelMarks:          []int{},
 			ModeKnob:              []string{ModeTV, ModeAmbience},
 			ModePotFitted:         true,
 			VolumeDeadbandPercent: 2,
@@ -869,6 +876,9 @@ func (c Config) Validate() error {
 	if c.Input.HoldPollInterval.Duration <= 0 {
 		add("input.hold_poll_interval must be positive")
 	}
+	if err := validateChannelMarks(c.Input); err != nil {
+		add("%v", err)
+	}
 	if len(c.Input.ModeKnob) == 0 {
 		add("input.mode_knob must list at least one mode, from %v", ScreenModes)
 	}
@@ -1013,6 +1023,44 @@ func (c Config) Validate() error {
 	}
 
 	return errors.Join(errs...)
+}
+
+// minMarkGap is the closest two channel marks may read, in ADC counts. Closer
+// than this and ordinary pot noise could tip the dial from one to the other.
+const minMarkGap = 40
+
+// validateChannelMarks checks a channel dial calibration: at least two marks,
+// in order (either direction, for a pot that reads backwards), within the
+// ADC's range and far enough apart to tell apart.
+func validateChannelMarks(in Input) error {
+	marks := in.ChannelMarks
+	if len(marks) == 0 {
+		return nil
+	}
+	if len(marks) < 2 {
+		return errors.New("input.channel_marks needs at least two marks, or none")
+	}
+	rising := marks[1] > marks[0]
+	for i, m := range marks {
+		if m < in.ADCMin || m > in.ADCMax {
+			return fmt.Errorf("input.channel_marks: mark %d reads %d, outside %d-%d", i+1, m, in.ADCMin, in.ADCMax)
+		}
+		if i == 0 {
+			continue
+		}
+		gap := m - marks[i-1]
+		if !rising {
+			gap = -gap
+		}
+		if gap <= 0 {
+			return fmt.Errorf("input.channel_marks must run in one direction; mark %d (%d) breaks it", i+1, m)
+		}
+		if gap < minMarkGap {
+			return fmt.Errorf("input.channel_marks: marks %d and %d are only %d apart; at least %d is needed to tell them apart",
+				i, i+1, gap, minMarkGap)
+		}
+	}
+	return nil
 }
 
 var usbIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{4}:[0-9a-fA-F]{4}$`)

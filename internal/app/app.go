@@ -384,6 +384,7 @@ func (a *App) initHardware(deps Deps) {
 	inputCfg.ChannelHysteresis = a.cfg.Input.ChannelHysteresis
 	inputCfg.VolumeDeadband = a.cfg.Input.VolumeDeadbandPercent
 	inputCfg.VolumePotFitted = a.cfg.Input.VolumePotFitted
+	inputCfg.ChannelMarks = a.cfg.Input.ChannelMarks
 	inputCfg.ModeCount = len(a.cfg.Input.ModeKnob)
 	inputCfg.ModePotFitted = a.cfg.Input.ModePotFitted
 	inputCfg.HoldDuration = a.cfg.Input.WiFiHoldDuration.Duration

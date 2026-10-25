@@ -80,8 +80,12 @@ func (a *App) inputSnapshot() state.Inputs {
 		return v
 	}
 	return state.Inputs{
-		ChannelKnob:   pos(input.PotChannel),
-		VolumeKnob:    pos(input.PotAlarmVolume),
+		ChannelKnob: pos(input.PotChannel),
+		VolumeKnob:  pos(input.PotAlarmVolume),
+		Raw: []int{
+			a.router.RawValue(input.PotChannel), a.router.RawValue(input.PotAlarmVolume),
+			a.router.RawValue(input.PotMode), a.router.RawValue(input.PotReservedB),
+		},
 		ModeKnob:      pos(input.PotMode),
 		ReservedKnobs: []float64{pos(input.PotReservedB)},
 	}

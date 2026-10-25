@@ -157,6 +157,9 @@ type Inputs struct {
 	ChannelKnob float64 `json:"channel_knob"`
 	// VolumeKnob is 0.0-1.0, or -1 when it has never reported.
 	VolumeKnob float64 `json:"volume_knob"`
+	// Raw is each pot's latest unfiltered ADC reading, pot 0 first, for
+	// calibrating a dial. Zero before a pot has reported.
+	Raw []int `json:"raw"`
 	// ModeKnob is 0.0-1.0, or -1 when it has never reported.
 	ModeKnob float64 `json:"mode_knob"`
 	// ReservedKnobs is pot 3, currently unassigned.

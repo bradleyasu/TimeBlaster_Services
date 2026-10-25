@@ -163,6 +163,14 @@ channel_hysteresis = 0.25
 # up in diagnostics rather than vanishing.
 volume_pot_fitted = true
 
+# Calibrates the channel knob to the printed marks on its dial: the raw reading
+# with the dial on each mark, mark 1 first (the companion app's state reports
+# inputs.raw). The knob then picks the nearest mark, mark N is channel N, and
+# turning past the first or last mark stays on it. A mark with no channel behind
+# it shows the standby screen. Leave empty to divide the knob's whole travel
+# equally between however many channels there are.
+channel_marks = []
+
 # The mode knob (pot 2) chooses what the television is doing, and the channel
 # knob then chooses within that mode. Modes are listed from fully anticlockwise;
 # the first is also the mode used until the knob reports. Available: "tv"

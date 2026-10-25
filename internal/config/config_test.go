@@ -166,6 +166,10 @@ func TestValidateFieldRanges(t *testing.T) {
 		{"overlay bad colour", func(c *Config) { c.Overlay.Color = "green" }, "color"},
 		{"overlay bad position", func(c *Config) { c.Overlay.Position = "middle-ish" }, "position"},
 		{"ssid too long", func(c *Config) { c.WiFi.SetupSSID = strings.Repeat("x", 33) }, "setup_ssid"},
+		{"one channel mark", func(c *Config) { c.Input.ChannelMarks = []int{900} }, "channel_marks"},
+		{"marks out of order", func(c *Config) { c.Input.ChannelMarks = []int{900, 1400, 1200} }, "one direction"},
+		{"marks too close", func(c *Config) { c.Input.ChannelMarks = []int{900, 920, 1500} }, "apart"},
+		{"mark beyond the ADC", func(c *Config) { c.Input.ChannelMarks = []int{900, 5000} }, "outside"},
 		{"no modes", func(c *Config) { c.Input.ModeKnob = nil }, "mode_knob"},
 		{"unknown mode", func(c *Config) { c.Input.ModeKnob = []string{"tv", "guide"} }, "mode_knob"},
 		// Two bands of the knob leading to the same mode would be a dead zone

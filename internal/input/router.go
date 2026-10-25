@@ -91,6 +91,10 @@ type Config struct {
 	// never move the alarm volume: an unconnected ADC pin floats, and letting
 	// that noise set the volume of an alarm is how an alarm gets missed.
 	VolumePotFitted bool
+	// ChannelMarks are raw readings measured at each printed mark on the
+	// channel dial, mark 1 first. When set, the knob selects the nearest mark
+	// and mark k is channel k; when empty, its travel is divided equally.
+	ChannelMarks []int
 	// ModeCount is how many modes the mode knob is divided between. Zero or
 	// one leaves the knob with nothing to choose.
 	ModeCount int
@@ -137,8 +141,12 @@ type Router struct {
 	mu      sync.Mutex
 	filters [PotCount]*Filter
 	rawLast [PotCount]int
-	bands   *HysteresisBands
+	bands   bandMapper
 	modes   *HysteresisBands
+	// chanCal is the channel knob's calibration: the shared one, except
+	// without end margins when the knob is calibrated to marks, which would
+	// otherwise snap a mark near either end onto the end itself.
+	chanCal Calibration
 	volume  *Deadband
 	buttons map[string]*HoldTracker
 
@@ -159,6 +167,7 @@ func NewRouter(cfg Config, clock system.Clock, log *slog.Logger, handler Handler
 		log:     log,
 		handler: handler,
 		bands:   NewHysteresisBands(0, cfg.ChannelHysteresis),
+		chanCal: cfg.Calibration,
 		// The mode knob gets the channel knob's hysteresis: a knob resting on
 		// a boundary must not flick the television between modes.
 		modes:    NewHysteresisBands(cfg.ModeCount, cfg.ChannelHysteresis),
@@ -168,6 +177,14 @@ func NewRouter(cfg Config, clock system.Clock, log *slog.Logger, handler Handler
 	}
 	for i := range r.filters {
 		r.filters[i] = NewFilter(cfg.FilterAlpha, cfg.FilterSnap)
+	}
+	if len(cfg.ChannelMarks) > 0 {
+		r.chanCal.EndMarginPercent = 0
+		marks := make([]float64, len(cfg.ChannelMarks))
+		for i, raw := range cfg.ChannelMarks {
+			marks[i] = r.chanCal.Normalize(raw)
+		}
+		r.bands = NewMarkedBands(marks, cfg.ChannelHysteresis)
 	}
 	return r
 }
@@ -195,6 +212,10 @@ func (r *Router) SetHandler(h Handler) {
 func (r *Router) SetChannelCount(n int) *ChannelSelect {
 	r.mu.Lock()
 	r.bands.SetCount(n, 0)
+	if marks := len(r.cfg.ChannelMarks); marks > 0 && n > marks {
+		r.log.Warn("more channels than marks on the channel dial; the extra channels cannot be reached with it",
+			"channels", n, "marks", marks)
+	}
 	primed := r.filters[PotChannel].Primed()
 	pos := r.filters[PotChannel].Value()
 	var ev *ChannelSelect
@@ -214,7 +235,7 @@ func (r *Router) SetChannelCount(n int) *ChannelSelect {
 func (r *Router) ChannelCount() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.bands.Count
+	return r.bands.Len()
 }
 
 // Position returns the filtered position of a potentiometer, and whether it has
@@ -247,7 +268,11 @@ func (r *Router) PotReport(index, raw int) {
 
 	r.mu.Lock()
 	r.rawLast[index] = raw
-	norm := r.cfg.Calibration.Normalize(raw)
+	cal := r.cfg.Calibration
+	if index == PotChannel {
+		cal = r.chanCal
+	}
+	norm := cal.Normalize(raw)
 	pos := r.filters[index].Update(norm)
 	handler := r.handler
 
