@@ -42,17 +42,18 @@ const (
 	charWidth = 0.53
 )
 
-// Colours, as #RRGGBB.
+// Colours, as #RRGGBB: the Timeblaster's purples, with Nickelodeon's slime
+// green (Pantone 375) where the old guide channel used yellow.
 const (
-	colBackground = "#0A1A5C"
-	colHeader     = "#061245"
-	colChannel    = "#10307A"
-	colProgramme  = "#163C96"
-	colHighlight  = "#2C55C8"
-	colAccent     = "#F2C230"
+	colBackground = "#2A0E4A"
+	colHeader     = "#1A0833"
+	colChannel    = "#3B1667"
+	colProgramme  = "#4C1D8A"
+	colHighlight  = "#6B2FC7"
+	colAccent     = "#97D700"
 	colText       = "#FFFFFF"
-	colSubtle     = "#C8D2FF"
-	colBrand      = "#33FF33"
+	colSubtle     = "#D8C8F5"
+	colBrand      = colAccent
 )
 
 // Frame is everything one drawing of the guide depends on.
