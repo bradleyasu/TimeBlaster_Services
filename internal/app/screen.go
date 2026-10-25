@@ -171,7 +171,7 @@ func (a *App) AmbienceChannelsChanged(channels []ambience.Channel) {
 // channel change does for the TV.
 func (a *App) AmbienceChannelChanged(ch *ambience.Channel) {
 	if ch != nil {
-		a.flashNanoText(nanoAmbienceText(ch.Number), a.cfg.General.ChannelBanner.Duration)
+		a.flashChannelText(nanoAmbienceText(ch.Number))
 	}
 	a.publish(state.NewEvent(state.EventScreenChanged, ch))
 }

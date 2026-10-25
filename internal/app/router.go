@@ -356,7 +356,7 @@ func (a *App) ChannelChanged(ch *ersatztv.Channel) {
 		}
 		// Flash the channel on the seven-segment display the way a television
 		// does, then let it fall back to the clock.
-		a.flashNanoText(nanoChannelText(ch.Number), a.cfg.General.ChannelBanner.Duration)
+		a.flashChannelText(nanoChannelText(ch.Number))
 	}
 	a.publish(state.NewEvent(state.EventChannelChanged, ch))
 }

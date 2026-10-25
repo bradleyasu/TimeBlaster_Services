@@ -99,6 +99,9 @@ type App struct {
 	// a channel banner timing out must not erase "SETUP".
 	displayMu  sync.Mutex
 	displayGen uint64
+	// lastChannelText is the channel last flashed on the display, guarded by
+	// displayMu; see flashChannelText.
+	lastChannelText string
 }
 
 // claimDisplay takes ownership of the seven-segment display and returns the
@@ -145,6 +148,24 @@ func (a *App) showNanoClock() {
 // The revert is skipped if something else has claimed the display in the
 // meantime, so a channel banner expiring cannot clear a Wi-Fi setup message or
 // an error that arrived after it.
+// flashChannelText flashes what is now on the television -- "Ch.02", "Am.01"
+// -- but only when it differs from the last one flashed.
+//
+// A channel is loaded again for reasons that change nothing the viewer chose:
+// switching the audio output, recovering a frozen picture, mpv restarting.
+// Flashing the same number for those buried whatever the display was saying,
+// such as the audio knob's HdMi, under a channel the viewer was already on.
+func (a *App) flashChannelText(text string) {
+	a.displayMu.Lock()
+	same := text == a.lastChannelText
+	a.lastChannelText = text
+	a.displayMu.Unlock()
+	if same {
+		return
+	}
+	a.flashNanoText(text, a.cfg.General.ChannelBanner.Duration)
+}
+
 func (a *App) flashNanoText(text string, d time.Duration) {
 	if a.nano == nil {
 		return
