@@ -538,8 +538,16 @@ func (s *Service) SelectChannel(ctx context.Context, ch ersatztv.Channel) error 
 			s.mu.Lock()
 			s.lastErr = err
 			s.mu.Unlock()
-			s.log.Error("could not start the channel stream",
-				"number", ch.Number, "url", url, "error", err)
+			if errors.Is(err, mpv.ErrNotConnected) {
+				// The same boot-time race as the standby image's: asked for a
+				// channel a moment before mpv has the display, and restored
+				// the moment it connects.
+				s.log.Debug("player not ready for the channel yet; "+
+					"it will be restored when mpv connects", "number", ch.Number)
+			} else {
+				s.log.Error("could not start the channel stream",
+					"number", ch.Number, "url", url, "error", err)
+			}
 			return fmt.Errorf("media: loading channel %s: %w", ch.Number, err)
 		}
 
