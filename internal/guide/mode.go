@@ -89,6 +89,21 @@ type Mode struct {
 	tuningSince time.Time
 }
 
+// staleRetry is how soon listings with nothing on now are read again.
+const staleRetry = 10 * time.Second
+
+// anythingOn reports whether any channel has a programme on now or later.
+func anythingOn(chs []ersatztv.GuideChannel, now time.Time) bool {
+	for _, c := range chs {
+		for _, p := range c.Programmes {
+			if p.Stop.After(now) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // maxTuning caps the corner's tuning card, for a stream that never starts.
 const maxTuning = 20 * time.Second
 
@@ -296,7 +311,11 @@ func (m *Mode) frame(ctx context.Context) Frame {
 	playing := m.tv.Showing().Number
 
 	m.mu.Lock()
-	stale := m.fetchedAt.IsZero() || m.clock.Since(m.fetchedAt) >= m.opts.RefreshInterval
+	since := m.clock.Since(m.fetchedAt)
+	stale := m.fetchedAt.IsZero() || since >= m.opts.RefreshInterval ||
+		// Nothing on now: ErsatzTV is probably still rebuilding its schedule
+		// after starting, so look again soon rather than in a minute.
+		(since >= staleRetry && !anythingOn(m.listings, m.clock.Now()))
 	m.mu.Unlock()
 	if stale {
 		// From the grid's first column, not from now: a programme that ended

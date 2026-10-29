@@ -64,6 +64,9 @@ func TestTheAppsSwitchHoldsUntilTheKnobMoves(t *testing.T) {
 	// until the knob is next turned.
 	h := newHarness(t, nil)
 	h.app.router.PotReport(input.PotAudio, 300) // knob on HDMI
+	// Let the knob's first report finish before the app speaks: it runs off
+	// the input path, and under load it could otherwise land second.
+	runAsync(h)
 
 	cur := h.app.Settings()
 	cur.TVAudioOutput = config.TVAudioSpeaker

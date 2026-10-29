@@ -18,6 +18,8 @@ type Fake struct {
 	Base string
 	// calls counts Channels invocations so tests can assert on refresh behaviour.
 	calls int
+	// guideReads counts Guide invocations, for the schedule's caching.
+	guideReads int
 }
 
 // NewFake returns a fake with the given channels.
@@ -69,6 +71,7 @@ func (f *Fake) StreamURL(c Channel) string {
 func (f *Fake) Guide(context.Context) (XMLTV, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.guideReads++
 	if f.Err != nil {
 		return XMLTV{}, f.Err
 	}
@@ -76,6 +79,13 @@ func (f *Fake) Guide(context.Context) (XMLTV, error) {
 		return XMLTV{Programmes: map[string][]Programme{}, Numbers: map[string]string{}}, nil
 	}
 	return f.guide, nil
+}
+
+// GuideReads reports how many times the schedule has been fetched.
+func (f *Fake) GuideReads() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.guideReads
 }
 
 // SetGuide replaces the schedule the fake serves.

@@ -378,8 +378,9 @@ func TestPagesTurnAndAChannelChangeJumpsToItsPage(t *testing.T) {
 }
 
 func TestListingsAreNotReadEverySecond(t *testing.T) {
-	// The guide redraws every second. A down ErsatzTV must not be asked
-	// every second too.
+	// The guide redraws every second. A down ErsatzTV must not be asked every
+	// second too -- but with nothing to show, it is asked again every ten,
+	// so the guide fills in soon after ErsatzTV is back.
 	f := newFixture(t, 3)
 	f.tv.guideErr = fmt.Errorf("unreachable")
 	f.m.Activate()
@@ -388,13 +389,57 @@ func TestListingsAreNotReadEverySecond(t *testing.T) {
 		_ = f.m.draw(ctx, false)
 		f.clock.Advance(time.Second)
 	}
-	if f.tv.guides != 1 {
-		t.Errorf("listings read %d times in 30 seconds, want 1", f.tv.guides)
+	if f.tv.guides < 2 || f.tv.guides > 4 {
+		t.Errorf("listings read %d times in 30 seconds, want about every 10 seconds", f.tv.guides)
 	}
-	f.clock.Advance(time.Minute)
+}
+
+func TestCurrentListingsAreReadOnceAMinute(t *testing.T) {
+	f := newFixture(t, 3) // every channel has a show on now
+	f.m.Activate()
+	ctx := context.Background()
+	for range 50 {
+		_ = f.m.draw(ctx, false)
+		f.clock.Advance(time.Second)
+	}
+	if f.tv.guides != 1 {
+		t.Errorf("current listings read %d times in 50 seconds, want 1", f.tv.guides)
+	}
+}
+
+func TestListingsWithNothingOnNowAreReadAgainSoon(t *testing.T) {
+	// After days switched off, ErsatzTV serves its old schedule until its
+	// scheduler rebuilds today's. Held for a minute, that read "no listings"
+	// long after the new schedule was ready.
+	f := newFixture(t, 3)
+	for i := range f.tv.guide.Channels {
+		f.tv.guide.Channels[i].Programmes = []ersatztv.Programme{prog("Last week", 9, 0, 10, 0)}
+	}
+	f.m.Activate()
+	ctx := context.Background()
 	_ = f.m.draw(ctx, false)
-	if f.tv.guides != 2 {
-		t.Errorf("listings not re-read after a minute: %d reads", f.tv.guides)
+	reads := f.tv.guides
+
+	f.tv.mu.Lock()
+	f.tv.guide.Channels = lineup(3) // the rebuilt schedule
+	f.tv.mu.Unlock()
+	for range 11 {
+		f.clock.Advance(time.Second)
+		_ = f.m.draw(ctx, false)
+	}
+	if f.tv.guides != reads+1 {
+		t.Fatalf("stale listings were not read again within ten seconds (%d reads)", f.tv.guides)
+	}
+	if len(lines(f.lastDraw(), "Show 1")) == 0 {
+		t.Error("the rebuilt schedule did not reach the screen")
+	}
+	// Current again: back to once a minute.
+	for range 30 {
+		f.clock.Advance(time.Second)
+		_ = f.m.draw(ctx, false)
+	}
+	if f.tv.guides != reads+1 {
+		t.Errorf("current listings were read %d more times in 30 seconds", f.tv.guides-reads-1)
 	}
 }
 

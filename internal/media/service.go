@@ -142,9 +142,10 @@ type Service struct {
 	// XML describing two days of scheduling, so re-fetching it for every phone
 	// that opens the guide tab would be wasteful on a Pi already busy
 	// transcoding.
-	guideMu    sync.Mutex
-	guide      ersatztv.XMLTV
-	guideAt    time.Time
+	guideMu sync.Mutex
+	guide   ersatztv.XMLTV
+	// guideUntil is when the cached schedule is next re-read.
+	guideUntil time.Time
 	guideValid bool
 }
 
@@ -152,6 +153,16 @@ type Service struct {
 // when a playout is rebuilt, which is rare, so this is about protecting the Pi
 // rather than about freshness.
 const GuideTTL = 2 * time.Minute
+
+// GuideStaleRetry is how soon a schedule with nothing on now is re-read.
+//
+// ErsatzTV serves the schedule it saved before shutting down until its
+// scheduler has rebuilt today's, a minute or so after it starts. After the
+// Timeblaster has been off for days, that saved schedule is entirely in the
+// past; kept for the full GuideTTL, it left the guide saying "no listings" for
+// minutes after a boot. A schedule that covers nothing from now on is treated
+// as ErsatzTV not being ready yet.
+const GuideStaleRetry = 10 * time.Second
 
 // Guide returns the channel lineup paired with its schedule for the window
 // starting now.
@@ -172,10 +183,10 @@ func (s *Service) Guide(ctx context.Context, window time.Duration) (ersatztv.Gui
 // programme that has already finished still belongs in it.
 func (s *Service) GuideBetween(ctx context.Context, from, until time.Time) (ersatztv.Guide, error) {
 	s.guideMu.Lock()
-	cached, at, valid := s.guide, s.guideAt, s.guideValid
+	cached, until, valid := s.guide, s.guideUntil, s.guideValid
 	s.guideMu.Unlock()
 
-	if !valid || s.clock.Since(at) > GuideTTL {
+	if !valid || !s.clock.Now().Before(until) {
 		fetched, err := s.etv.Guide(ctx)
 		if err != nil {
 			if !valid {
@@ -187,12 +198,29 @@ func (s *Service) GuideBetween(ctx context.Context, from, until time.Time) (ersa
 		} else {
 			cached = fetched
 			s.guideMu.Lock()
-			s.guide, s.guideAt, s.guideValid = fetched, s.clock.Now(), true
+			keep := GuideTTL
+			if !coversNow(fetched, s.clock.Now()) {
+				keep = GuideStaleRetry
+				s.log.Debug("ErsatzTV's schedule has nothing on now; it is probably still being rebuilt")
+			}
+			s.guide, s.guideUntil, s.guideValid = fetched, s.clock.Now().Add(keep), true
 			s.guideMu.Unlock()
 		}
 	}
 
 	return ersatztv.MergeGuide(s.Channels(), cached, from, until), nil
+}
+
+// coversNow reports whether a schedule has anything on now or later.
+func coversNow(x ersatztv.XMLTV, now time.Time) bool {
+	for _, ps := range x.Programmes {
+		for _, p := range ps {
+			if p.Stop.After(now) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // NewService builds the media service.
