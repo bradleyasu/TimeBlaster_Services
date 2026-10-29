@@ -85,7 +85,9 @@ func (a *App) OnAudioOutputSelect(ev input.AudioOutputSelect) {
 		output = config.TVAudioSpeaker
 	}
 	// Off the input path: switching reloads the picture, which takes a moment.
+	a.knobWork.Add(1)
 	go func() {
+		defer a.knobWork.Done()
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 		changed, err := a.setTVAudioOutput(ctx, output)

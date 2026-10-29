@@ -83,10 +83,13 @@ type App struct {
 	// audioOutMu serialises switching the television's audio, which the app
 	// and the audio knob can both ask for at once.
 	audioOutMu sync.Mutex
-	wifi       wifi.Manager
-	hub        *wsocket.Hub
-	web        *web.Server
-	sup        *supervisor
+	// knobWork tracks switches the audio knob has started in the background,
+	// so shutdown can let them finish before the database closes under them.
+	knobWork sync.WaitGroup
+	wifi     wifi.Manager
+	hub      *wsocket.Hub
+	web      *web.Server
+	sup      *supervisor
 
 	// ownsStore records whether we opened the database and must close it.
 	ownsStore bool
@@ -677,6 +680,15 @@ func (a *App) shutdown() {
 	}
 	if a.hub != nil {
 		a.hub.Close()
+	}
+	// A knob switch still writing its setting must finish first. Bounded, so
+	// a wedged player cannot hold the shutdown.
+	done := make(chan struct{})
+	go func() { a.knobWork.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		a.log.Warn("an audio switch was still running at shutdown")
 	}
 	if a.ownsStore {
 		if err := a.store.Close(); err != nil {
