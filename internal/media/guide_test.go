@@ -56,3 +56,32 @@ func TestAScheduleEntirelyInThePastIsFetchedAgainSoon(t *testing.T) {
 		t.Errorf("the rebuilt schedule was not served: %+v", g.Channels)
 	}
 }
+
+func TestTheGuideSpansTheWindowAskedFor(t *testing.T) {
+	// The cache's own expiry once shadowed the window's end, cutting three
+	// hours of listings down to the next two minutes.
+	f := newFixture(t, chans()...)
+	ctx := context.Background()
+	if err := f.svc.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	now := f.clock.Now()
+	f.etv.SetGuide(ersatztv.XMLTV{
+		Programmes: map[string][]ersatztv.Programme{"C1": {
+			{Title: "On now", Start: now.Add(-time.Minute), Stop: now.Add(30 * time.Minute)},
+			{Title: "Later", Start: now.Add(2 * time.Hour), Stop: now.Add(3 * time.Hour)},
+		}},
+		Numbers: map[string]string{"C1": "1"},
+	})
+
+	g, err := f.svc.Guide(ctx, 3*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !g.Until.Equal(now.Add(3 * time.Hour)) {
+		t.Errorf("the guide runs until %s, want three hours from now", g.Until.Sub(now))
+	}
+	if n := len(g.Channels[0].Programmes); n != 2 {
+		t.Errorf("%d programmes in three hours, want both", n)
+	}
+}

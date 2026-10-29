@@ -183,10 +183,10 @@ func (s *Service) Guide(ctx context.Context, window time.Duration) (ersatztv.Gui
 // programme that has already finished still belongs in it.
 func (s *Service) GuideBetween(ctx context.Context, from, until time.Time) (ersatztv.Guide, error) {
 	s.guideMu.Lock()
-	cached, until, valid := s.guide, s.guideUntil, s.guideValid
+	cached, expires, valid := s.guide, s.guideUntil, s.guideValid
 	s.guideMu.Unlock()
 
-	if !valid || !s.clock.Now().Before(until) {
+	if !valid || !s.clock.Now().Before(expires) {
 		fetched, err := s.etv.Guide(ctx)
 		if err != nil {
 			if !valid {
