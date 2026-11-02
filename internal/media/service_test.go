@@ -1200,7 +1200,11 @@ func TestWatchdogGivesAStartingChannelTimeToArrive(t *testing.T) {
 		waitForWaiter(t, f.clock)
 		f.clock.Advance(cfg.StallCheckInterval.Duration)
 	}
-	if got := watchdogChecks(f); got < 10 {
+	// Seven checks two seconds apart span fourteen seconds: past the stall
+	// timeout, so a channel still starting has provably outlived it. Asking
+	// for more was flaky -- the clock is advanced whenever any timer waits,
+	// the overlay's included, so the watchdog can miss an advance.
+	if got := watchdogChecks(f); got < 7 {
 		t.Fatalf("the watchdog only checked %d times; the test proved nothing", got)
 	}
 	if n := len(f.player.CallsNamed("loadfile")); n != 0 {
