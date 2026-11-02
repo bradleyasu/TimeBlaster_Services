@@ -650,6 +650,63 @@ configure_bootloader() {
   note "To undo: sudo rpi-eeprom-config --edit and remove POWER_OFF_ON_HALT=1."
 }
 
+# The board's LEDs, kept dark: they show through the gaps in the enclosure.
+# Managed as one marked block, so a re-run replaces it rather than appending
+# another copy, and removing it by hand is obvious.
+readonly LED_BLOCK_BEGIN="# BEGIN timeblaster-leds (managed by setup.sh)"
+readonly LED_BLOCK_END="# END timeblaster-leds"
+
+configure_leds() {
+  step "Turning the board's LEDs off"
+
+  local boot_config=""
+  for candidate in /boot/firmware/config.txt /boot/config.txt; do
+    [[ -f "$candidate" ]] && { boot_config="$candidate"; break; }
+  done
+  if [[ -z "$boot_config" ]]; then
+    skip "no config.txt found; not a Raspberry Pi boot layout"
+    return
+  fi
+
+  # [all] first, so the block applies whatever section the file ended in.
+  local block
+  block="$(cat <<EOF
+${LED_BLOCK_BEGIN}
+[all]
+# The green activity LED and the red power LED. The firmware still blinks them
+# for the first moments of a boot, before these take effect.
+dtparam=act_led_trigger=none
+dtparam=pwr_led_trigger=none
+# The two Ethernet port LEDs, should a cable ever be plugged in. 4 is off.
+dtparam=eth_led0=4
+dtparam=eth_led1=4
+${LED_BLOCK_END}
+EOF
+)"
+
+  if [[ "$(cat "$boot_config")" == *"$block"* ]]; then
+    skip "the LED settings are already in ${boot_config}"
+  else
+    # Drop any earlier copy of the block, matched literally, then append.
+    local without tmp
+    without="$(awk -v b="$LED_BLOCK_BEGIN" -v e="$LED_BLOCK_END" \
+      '$0 == b { skip = 1 } !skip { print } $0 == e { skip = 0 }' "$boot_config")"
+    tmp="$(mktemp)"
+    printf '%s\n\n%s\n' "$without" "$block" >"$tmp"
+    run install -m 0644 "$tmp" "$boot_config"
+    rm -f "$tmp"
+    ok "LED settings written to ${boot_config} (they persist from the next boot)"
+  fi
+
+  # And now, rather than at the next boot.
+  local led
+  for led in ACT PWR; do
+    if [[ -w "/sys/class/leds/${led}/trigger" ]]; then
+      run sh -c "echo none > /sys/class/leds/${led}/trigger && echo 0 > /sys/class/leds/${led}/brightness"
+    fi
+  done
+}
+
 configure_hostname() {
   step "Configuring the hostname and mDNS"
 
@@ -1412,6 +1469,7 @@ main() {
   install_firmware
   configure_journald
   configure_bootloader
+  configure_leds
   install_etv_offline_image
   configure_hostname
   configure_console
