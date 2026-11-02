@@ -72,6 +72,21 @@ const (
 	reloadFailureReset = 5 * time.Minute
 )
 
+// standbyRetryDelay is how long to wait before restoring the standby image the
+// nth time running: at once the first time, which covers a one-off glitch,
+// then 2 seconds, doubling to a minute -- so a television switched off for the
+// night costs one reload a minute, and comes back within one of being on.
+func standbyRetryDelay(n int) time.Duration {
+	if n <= 1 {
+		return 0
+	}
+	d := 2 * time.Second
+	for i := 2; i < n && d < time.Minute; i++ {
+		d *= 2
+	}
+	return min(d, time.Minute)
+}
+
 // stoppedScreen marks "playback stopped" in shownImage. It is a sentinel rather
 // than an empty string so that the no-image-configured case is still
 // de-duplicated: without it, every failed refresh would re-issue a stop.
@@ -133,6 +148,9 @@ type Service struct {
 	reloadChannel  string
 	reloadFailures int
 	reloadLastAt   time.Time
+	// standbyFailures counts the standby image failing to stay up since a
+	// picture last appeared, which sets how long to wait before restoring it.
+	standbyFailures int
 	// started records that the selected channel has produced a picture since
 	// it was last loaded. Until it has, the watchdog allows it the longer
 	// start-up time rather than calling it stalled.
@@ -714,6 +732,7 @@ func (s *Service) HandlePlayerEvent(ev mpv.Event) {
 		s.mu.Lock()
 		s.reloadChannel = ""
 		s.reloadFailures = 0
+		s.standbyFailures = 0
 		s.started = true
 		s.mu.Unlock()
 		if s.overlay != nil {
@@ -741,14 +760,42 @@ func (s *Service) HandlePlayerEvent(ev mpv.Event) {
 		// not, but if it ever does the television goes black -- which is the
 		// single thing this subsystem exists to prevent, so put it back rather
 		// than assuming nothing is wrong.
-		s.log.Warn("the standby image ended unexpectedly; restoring it", "reason", ev.Reason)
+		//
+		// But not instantly, and not forever at full speed. With no display
+		// attached -- the television off, or unplugged -- mpv cannot open its
+		// video output, so every file ends at once with an error. Restored
+		// immediately each time, that was 88 reloads a second until something
+		// else took the screen.
+		s.mu.Lock()
+		s.standbyFailures++
+		n := s.standbyFailures
+		s.mu.Unlock()
+		delay := standbyRetryDelay(n)
+		switch {
+		case n <= 3:
+			s.log.Warn("the standby image ended unexpectedly; restoring it",
+				"reason", ev.Reason, "error", ev.Error, "attempt", n, "retry_in", delay)
+		case n%30 == 0:
+			s.log.Warn("still cannot show the standby image; is the television connected and on?",
+				"attempts", n, "error", ev.Error, "retry_in", delay)
+		default:
+			s.log.Debug("the standby image ended again", "attempt", n, "error", ev.Error)
+		}
 		go func() {
+			if delay > 0 {
+				<-s.clock.NewTimer(delay).C()
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 
 			// Clear what we believe is on screen, or ShowNoChannel would decide
-			// the right image is already up and do nothing.
+			// the right image is already up and do nothing -- unless a channel
+			// has taken the screen while we waited, which settles it.
 			s.mu.Lock()
+			if s.current != nil {
+				s.mu.Unlock()
+				return
+			}
 			s.shownImage = ""
 			s.mu.Unlock()
 
