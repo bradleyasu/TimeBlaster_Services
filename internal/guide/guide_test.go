@@ -712,3 +712,38 @@ func TestTheGuideAsksForTheWiFiStateOnEveryDraw(t *testing.T) {
 		t.Error("going offline did not redraw the symbol")
 	}
 }
+
+// ys returns every y coordinate in a drawing.
+func ys(drawing string) []float64 {
+	body := drawing[strings.Index(drawing, `\p1}`)+4 : strings.Index(drawing, `{\p0}`)]
+	var out []float64
+	fields := strings.Fields(body)
+	for i := 0; i < len(fields); i++ {
+		if fields[i] == "m" || fields[i] == "l" || fields[i] == "b" {
+			continue
+		}
+		var y float64
+		fmt.Sscanf(fields[i+1], "%f", &y)
+		out = append(out, y)
+		i++
+	}
+	return out
+}
+
+func TestTheWiFiSymbolIsCentredOnTheClock(t *testing.T) {
+	// Measured on the television, the clock's digits span rows 22 to 42. The
+	// symbol is centred on them and about as tall.
+	ass := Render(Frame{Now: at(14, 47), Channels: lineup(1), WiFi: true}) // no channel highlighted
+	var top, bottom float64 = 1e9, -1e9
+	for _, d := range shapes(ass, colAccent) {
+		for _, y := range ys(d) {
+			top, bottom = min(top, y), max(bottom, y)
+		}
+	}
+	if mid := (top + bottom) / 2; mid < clockMidY-1 || mid > clockMidY+1 {
+		t.Errorf("the symbol is centred on row %.1f, the clock on %d", mid, clockMidY)
+	}
+	if h := bottom - top; h < 18 || h > 26 {
+		t.Errorf("the symbol is %.0f tall against digits of about 20", h)
+	}
+}

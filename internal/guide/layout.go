@@ -133,10 +133,11 @@ func renderPanel(b *strings.Builder, f Frame) {
 	text(b, x, 20, 7, 28, colBrand, true, "TIMEBLASTER GUIDE")
 	clock := timeText(f.Now, f.Clock24h)
 	text(b, panelRight, 16, 9, 34, colText, true, clock)
-	// The Wi-Fi symbol sits just left of the clock, its base level with the
-	// bottom of the digits.
+	// The Wi-Fi symbol sits just left of the clock, centred on the digits and
+	// about as tall as them. The symbol's point is at the bottom of its box,
+	// so its centre is half its height above the point.
 	clockW := int(float64(utf8.RuneCountInString(clock)) * 34 * charWidth)
-	wifiIcon(b, panelRight-clockW-20-wifiIconR, 52, f.WiFi)
+	wifiIcon(b, panelRight-clockW-20-wifiIconR, clockMidY+(wifiIconR+1)/2, f.WiFi)
 	text(b, x, 60, 7, 20, colAccent, false, strings.ToUpper(f.Now.Format("Monday, Jan 2")))
 
 	ch := find(f.Channels, f.Playing)
@@ -231,8 +232,14 @@ func renderRow(b *strings.Builder, ch ersatztv.GuideChannel, y int, playing bool
 	}
 }
 
-// The Wi-Fi symbol: a dot and two arcs, the radius of the outermost.
-const wifiIconR = 27
+// The Wi-Fi symbol: a dot and two arcs, the radius of the outermost -- which
+// is also its height, chosen to match the clock's digits.
+const wifiIconR = 23
+
+// clockMidY is the vertical centre of the clock's digits on the canvas, as
+// rendered: measured from a screenshot of the television, where the digits of
+// DejaVu Sans Mono at size 34, positioned at y=16, span rows 22 to 42.
+const clockMidY = 32
 
 // colOffline slashes the Wi-Fi symbol when the Timeblaster is off the network.
 const colOffline = "#FF4D5E"
