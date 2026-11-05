@@ -40,6 +40,8 @@ type Server struct {
 	netOp sync.Mutex
 
 	mu sync.Mutex
+	// joining is set while connect runs; see Status.Joining.
+	joining bool
 	// mode is the current networking mode.
 	mode Mode
 	// setupSince and setupExpires bound setup mode.
@@ -243,6 +245,7 @@ func (s *Server) Status(ctx context.Context) Status {
 		SetupSince:     s.setupSince,
 		SetupExpiresAt: s.setupExpires,
 		LastError:      s.lastErr,
+		Joining:        s.joining,
 	}
 	if s.mode == ModeSetup {
 		st.SetupSSID = s.cfg.SetupSSID
@@ -450,6 +453,14 @@ func (s *Server) Connect(ctx context.Context, ssid, passphrase string, hidden bo
 }
 
 func (s *Server) connect(ctx context.Context, ssid, passphrase string, hidden bool) (ConnectResult, error) {
+	s.mu.Lock()
+	s.joining = true
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.joining = false
+		s.mu.Unlock()
+	}()
 	if err := ValidateCredentials(ssid, passphrase); err != nil {
 		return ConnectResult{Success: false, SSID: ssid, Message: err.Error()}, err
 	}

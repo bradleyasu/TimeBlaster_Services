@@ -426,6 +426,8 @@ func portalHTML(setupSSID, appURL string) string {
   // attempt identifies the newest connection attempt; a watcher for an older
   // one stops at its next look.
   var attempt = 0;
+  // seenGone mirrors the newest attempt's "gone", for setupBack.
+  var seenGone = false;
 
   function failed(text) {
     attempt++;
@@ -438,12 +440,22 @@ func portalHTML(setupSSID, appURL string) string {
   // Setup mode is back. With an error, joining failed and the Timeblaster
   // raised setup again so another try is possible; without one, setup was
   // simply started again -- the Wi-Fi button held a second time.
-  function setupBack(st) {
+  function setupBack(st, secs) {
+    // Still joining: setup mode lasts until the attempt succeeds, so this is
+    // progress, not failure.
+    if (st.joining) return false;
+    // Setup mode with no attempt running, while the setup network has never
+    // been seen to go: the request may simply not have arrived. Not a verdict
+    // until it has had time to.
+    if (!seenGone && secs < 20) return false;
     if (st.last_error) {
       failed(st.last_error + ' Check the password, then try again.');
-    } else {
+    } else if (seenGone) {
       failed('Setup mode started again on the Timeblaster. Choose your network and try again.');
+    } else {
+      failed('The Timeblaster did not start joining. Choose your network and try again.');
     }
+    return true;
   }
 
   function watch(ssid) {
@@ -454,6 +466,7 @@ func portalHTML(setupSSID, appURL string) string {
     // Timeblaster is joining, and this page can hear nothing until the phone
     // is back on the home Wi-Fi. The Timeblaster's display can, though.
     var gone = false;
+    seenGone = false;
 
     // Progress, so a wait never looks like a hang: the elapsed time, and what
     // to do if the phone is slow to go back to its own Wi-Fi.
@@ -481,6 +494,7 @@ func portalHTML(setupSSID, appURL string) string {
     progress();
 
     function again() { setTimeout(poll, 2000); }
+    function elapsed() { return (Date.now() - started) / 1000; }
 
     function get(url) {
       var ctl = window.AbortController ? new AbortController() : null;
@@ -503,8 +517,8 @@ func portalHTML(setupSSID, appURL string) string {
       get(APP + '/api/wifi/status').then(function (st) {
         if (mine !== attempt) return;
         if (st.mode === 'setup') {
-          // Reached over the setup network, which is up again.
-          setupBack(st);
+          // Reached over the setup network: still up, or up again.
+          if (!setupBack(st, elapsed())) again();
           return;
         }
         if (st.connected) {
@@ -527,12 +541,12 @@ func portalHTML(setupSSID, appURL string) string {
         get('/api/status').then(function (st) {
           if (mine !== attempt) return;
           if (st.mode === 'setup') {
-            setupBack(st);
+            if (!setupBack(st, elapsed())) again();
             return;
           }
           again();
         }, function () {
-          gone = true; // the setup network has stopped answering
+          gone = seenGone = true; // the setup network has stopped answering
           again();
         });
       });

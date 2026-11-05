@@ -81,3 +81,41 @@ func indexOf(xs []string, sub string) int {
 	}
 	return -1
 }
+
+func TestStatusSaysJoiningWhileAnAttemptRuns(t *testing.T) {
+	// Setup mode lasts until a join succeeds, so without this the setup page
+	// cannot tell "joining" from "setup started again" -- and once called a
+	// join that went on to succeed a failure.
+	s, runner, _ := newTestServer(t)
+	ctx := context.Background()
+	if err := s.EnterSetup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if s.Status(ctx).Joining {
+		t.Fatal("joining before any attempt")
+	}
+	joining := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	runner.OnRun = func(c system.RecordedCommand) ([]byte, error) {
+		if strings.Contains(c.String(), "connection up Home") {
+			once.Do(func() { close(joining) })
+			<-release
+		}
+		if isDeviceShow(c) {
+			return []byte("GENERAL.STATE:100 (connected)\nGENERAL.CONNECTION:Home\nIP4.ADDRESS[1]:192.168.1.42/24\n"), nil
+		}
+		return nil, nil
+	}
+	done := make(chan struct{})
+	go func() { _, _ = s.Connect(ctx, "Home", "hunter22", false); close(done) }()
+	<-joining
+	if st := s.Status(ctx); !st.Joining || st.Mode != ModeSetup {
+		t.Errorf("mid-attempt status %+v: want setup mode, joining", st)
+	}
+	close(release)
+	<-done
+	if s.Status(ctx).Joining {
+		t.Error("still joining after the attempt finished")
+	}
+}

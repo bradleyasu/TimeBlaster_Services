@@ -116,6 +116,11 @@ type Status struct {
 	SetupExpiresAt time.Time `json:"setup_expires_at,omitzero"`
 	// LastError describes the most recent networking failure.
 	LastError string `json:"last_error,omitempty"`
+	// Joining is set while an attempt to join a network is under way. Setup
+	// mode stays set until the attempt succeeds, so without it "setup mode,
+	// joining" and "setup mode, started again" look the same from outside --
+	// and the setup page once called a join that went on to succeed a failure.
+	Joining bool `json:"joining,omitempty"`
 }
 
 // RemoteStatus describes Raspberry Pi Connect's state.

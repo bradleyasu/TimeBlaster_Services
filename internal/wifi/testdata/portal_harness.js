@@ -75,8 +75,8 @@ const scenarios = [
       u === '/api/connect' ? { success: false, message: 'Password must be 8-63 characters.' } :
       u === APP ? { mode: 'normal', connected: true, ssid: 'Home' } : 'down',
     (r) => r.href === 'http://10.42.0.1/' && /8-63/.test(r.msg) && !r.btn],
-  ['setup started again, no error: says so, not "wrong password"', (u) => u === '/api/networks' ? { networks: [] } :
-      u === '/api/status' ? { mode: 'setup' } : 'down',
+  ['setup started again, no error: says so, not "wrong password"', (u, n) => u === '/api/networks' ? { networks: [] } :
+      u === '/api/status' ? (n < 3 ? 'down' : { mode: 'setup' }) : 'down',
     (r) => /started again/.test(r.msg) && !/password/i.test(r.msg) && !r.btn],
   ['a scan that fails keeps the list to choose from', (u) => u === '/api/networks' ? 'down' :
       u === '/api/status' ? { mode: 'setup', last_error: 'Wrong password.' } : 'down',
@@ -84,6 +84,19 @@ const scenarios = [
   ['a slow phone gets the app link, then the app', (u, n) => u === '/api/networks' ? { networks: [] } :
       u === APP ? (n < 12 ? 'down' : { mode: 'normal', connected: true, ssid: 'Home' }) : 'down',
     (r) => r.appLinkShown && r.href === 'http://timeblaster.local:8080/' && r.t >= 15000],
+  ['setup network still up while joining: not a failure', (u, n) => u === '/api/networks' ? { networks: [] } :
+      u === APP ? (n < 3 ? { mode: 'setup', joining: true } : n < 6 ? 'down' : { mode: 'normal', connected: true, ssid: 'Home' }) :
+      u === '/api/status' ? 'down' : 'down',
+    (r) => r.href === 'http://timeblaster.local:8080/' && /Connected/.test(r.msg)],
+  ['a long join, still reachable and "joining": waits it out', (u, n) => u === '/api/networks' ? { networks: [] } :
+      u === APP ? (n < 16 ? { mode: 'setup', joining: true } : n < 18 ? 'down' : { mode: 'normal', connected: true, ssid: 'Home' }) : 'down',
+    (r) => r.href === 'http://timeblaster.local:8080/' && /Connected/.test(r.msg) && r.t >= 30000],
+  ['setup answering early without "joining": waits rather than failing', (u, n) => u === '/api/networks' ? { networks: [] } :
+      u === APP ? (n < 3 ? { mode: 'setup' } : n < 6 ? 'down' : { mode: 'normal', connected: true, ssid: 'Home' }) : 'down',
+    (r) => r.href === 'http://timeblaster.local:8080/'],
+  ['the request never arrived: says so after a while', (u) => u === '/api/networks' ? { networks: [] } :
+      u === APP ? { mode: 'setup' } : 'down',
+    (r) => /did not start joining/.test(r.msg) && !r.btn && r.t >= 20000],
   ['the gap: points at the display once the setup network has gone', (u, n) => u === '/api/networks' ? { networks: [] } :
       u === APP ? (n < 4 ? 'down' : { mode: 'normal', connected: true, ssid: 'Home' }) : 'down',
     (r) => r.sawDisplayHint && r.href === 'http://timeblaster.local:8080/'],
