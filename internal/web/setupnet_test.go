@@ -41,3 +41,27 @@ func TestTheAppOnTheHomeNetworkIsServedAsNormal(t *testing.T) {
 		t.Errorf("the app was redirected on the home network, to %q", rec.Header().Get("Location"))
 	}
 }
+
+type fakeSetupMode bool
+
+func (f fakeSetupMode) InSetupMode() bool { return bool(f) }
+
+func TestInSetupModeEveryPageGoesToTheSetupPage(t *testing.T) {
+	// Over the setup network a phone may well reach the Timeblaster by IPv6
+	// -- that is what .local names often resolve to -- so the address a
+	// request arrived on cannot be what decides. The mode does.
+	f := newFixture(t)
+	f.srv.deps.Setup = fakeSetupMode(true)
+	rec := httptest.NewRecorder()
+	f.handler.ServeHTTP(rec, arrivingOn(httptest.NewRequest(http.MethodGet, "/", nil), "[fe80::1]:8080"))
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "http://10.42.0.1/" {
+		t.Errorf("got %d to %q, want the setup page", rec.Code, rec.Header().Get("Location"))
+	}
+
+	f.srv.deps.Setup = fakeSetupMode(false)
+	rec = httptest.NewRecorder()
+	f.handler.ServeHTTP(rec, arrivingOn(httptest.NewRequest(http.MethodGet, "/", nil), "[fe80::1]:8080"))
+	if rec.Code == http.StatusFound {
+		t.Error("redirected to the setup page outside setup mode")
+	}
+}

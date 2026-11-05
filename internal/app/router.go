@@ -156,6 +156,26 @@ func (a *App) handleWiFiButton(ev input.ButtonEvent) {
 		return
 	}
 
+	// Held again while in setup mode: the way back. Setup is cancelled and the
+	// Timeblaster rejoins the network it was on, so there is always a physical
+	// way out -- no waiting for the timeout, and never a reason to open the
+	// case for the Ethernet port.
+	if a.inSetup.Load() {
+		a.log.Warn("Wi-Fi button held during setup; cancelling setup and rejoining the saved network",
+			"held", ev.Held.Round(time.Millisecond))
+		a.flashNanoText("bAcK", 3*time.Second)
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+			defer cancel()
+			if err := a.wifi.ExitSetupMode(ctx); err != nil {
+				a.log.Error("could not cancel Wi-Fi setup mode", "error", err)
+				return
+			}
+			a.publish(state.NewEvent(state.EventWiFiChanged, map[string]any{"mode": "normal"}))
+		}()
+		return
+	}
+
 	a.log.Warn("Wi-Fi button held; entering setup mode",
 		"held", ev.Held.Round(time.Millisecond), "ssid", a.cfg.WiFi.SetupSSID)
 

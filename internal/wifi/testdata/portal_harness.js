@@ -10,7 +10,13 @@ function run(name, routes, expect) {
     const el = () => ({ style: {}, innerHTML: '', value: '', checked: false, disabled: false,
       className: '', textContent: '', listeners: {}, appendChild() {},
       addEventListener(ev, fn) { this.listeners[ev] = fn; } });
-    const els = { ssid: el(), manual: el(), 'ssid-manual': el(), psk: el(), go: el(), msg: el() };
+    const els = { ssid: el(), manual: el(), 'ssid-manual': el(), psk: el(), go: el(), msg: el(),
+      rescan: el(), 'open-app': el() };
+    els.ssid.options = [{}];
+    // Remember whether the "open the app" link was ever shown.
+    let appLinkShown = false, cls = '';
+    Object.defineProperty(els['open-app'], 'className', {
+      get: () => cls, set: (v) => { cls = v; if (/show/.test(v)) appLinkShown = true; } });
     els.ssid.value = 'Home';
     const location = { href: 'http://10.42.0.1/' };
     const calls = [];
@@ -31,7 +37,7 @@ function run(name, routes, expect) {
     els.go.listeners.click();
     // Drive time forward, letting promises settle between steps.
     (function tick(i) {
-      if (i > 400 || done) return finish();
+      if (i > 3000 || done) return finish();
       timers.sort((a, b) => a.at - b.at);
       const t = timers.shift();
       if (!t) return finish();
@@ -41,7 +47,8 @@ function run(name, routes, expect) {
     })(0);
     function finish() {
       if (done) return; done = true;
-      const ok = expect({ href: location.href, msg: els.msg.textContent, kind: els.msg.className, btn: els.go.disabled, t: now });
+      const ok = expect({ href: location.href, msg: els.msg.textContent, kind: els.msg.className,
+        btn: els.go.disabled, t: now, list: els.ssid.innerHTML, appLinkShown });
       console.log((ok ? 'PASS ' : 'FAIL ') + name + ' | ' + location.href + ' | ' + els.msg.className + ' | ' + els.msg.textContent.slice(0, 90));
       resolve(ok);
     }
@@ -66,6 +73,15 @@ const scenarios = [
       u === '/api/connect' ? { success: false, message: 'Password must be 8-63 characters.' } :
       u === APP ? { mode: 'normal', connected: true, ssid: 'Home' } : 'down',
     (r) => r.href === 'http://10.42.0.1/' && /8-63/.test(r.msg) && !r.btn],
+  ['setup started again, no error: says so, not "wrong password"', (u) => u === '/api/networks' ? { networks: [] } :
+      u === '/api/status' ? { mode: 'setup' } : 'down',
+    (r) => /started again/.test(r.msg) && !/password/i.test(r.msg) && !r.btn],
+  ['a scan that fails keeps the list to choose from', (u) => u === '/api/networks' ? 'down' :
+      u === '/api/status' ? { mode: 'setup', last_error: 'Wrong password.' } : 'down',
+    (r) => !/Could not scan/.test(r.list) && /Wrong password/.test(r.msg) && !r.btn],
+  ['a slow phone gets the app link, then the app', (u, n) => u === '/api/networks' ? { networks: [] } :
+      u === APP ? (n < 12 ? 'down' : { mode: 'normal', connected: true, ssid: 'Home' }) : 'down',
+    (r) => r.appLinkShown && r.href === 'http://timeblaster.local:8080/' && r.t >= 15000],
   ['never appears: gives up after three minutes', (u) => u === '/api/networks' ? { networks: [] } : 'down',
     (r) => r.href === 'http://10.42.0.1/' && /has not appeared/.test(r.msg) && !r.btn && r.t >= 180000],
 ];

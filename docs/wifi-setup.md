@@ -119,6 +119,18 @@ What no address can do is reach a Timeblaster in setup mode while your phone is
 still on your home Wi-Fi: they are on different networks. Join
 TIMEBLASTER-SETUP first.
 
+### Changed your mind, or something went wrong
+
+**Hold the Wi-Fi button for five seconds again.** While setup mode is active, a
+second hold cancels it: the access point comes down and the Timeblaster rejoins
+the network it was on before. The display flashes `bAcK`, then the clock
+returns. If a connection attempt is still under way, the cancel waits for it to
+finish rather than interrupting it halfway.
+
+Short of that, the Timeblaster always finds its way back to the saved network:
+a failed attempt rolls back to it, setup mode expires back to it, and a power
+cycle rejoins it. It is never left on no network with no way to reach it.
+
 Setup mode ends by itself after `wifi.setup_timeout` (default 15 minutes) if
 nothing happens, so a forgotten access point does not stay up.
 

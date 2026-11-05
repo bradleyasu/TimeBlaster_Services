@@ -136,6 +136,11 @@ type FirmwareService interface {
 // is nothing to update to.
 var ErrFirmwareRefused = errors.New("firmware update refused")
 
+// SetupModeService reports whether the Timeblaster is in Wi-Fi setup mode.
+type SetupModeService interface {
+	InSetupMode() bool
+}
+
 // SnapshotService builds the full state document.
 type SnapshotService interface {
 	Snapshot() state.Snapshot
@@ -155,6 +160,8 @@ type Deps struct {
 	Snapshots SnapshotService
 	// Firmware may be nil, which reports no update ever available.
 	Firmware FirmwareService
+	// Setup reports Wi-Fi setup mode. May be nil.
+	Setup SetupModeService
 	// WebSocket is the hub handler, mounted at /api/ws.
 	WebSocket http.Handler
 	Logger    *slog.Logger
@@ -303,17 +310,24 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		// Reached over the Timeblaster's own setup network -- the NFC tag's
-		// address resolves there while it is in setup mode -- the app has
-		// nothing to offer: the Timeblaster is not on a network yet. The setup
-		// page is what the visitor needs. The API is left alone, because that
-		// page asks it whether setup is over.
-		if s.setupIP != nil && !strings.HasPrefix(r.URL.Path, "/api/") && localIP(r).Equal(s.setupIP) {
+		// In setup mode -- the NFC tag's address reaches the Timeblaster over
+		// its own setup network then -- the app has nothing to offer: the
+		// Timeblaster is not on a network yet. The setup page is what the
+		// visitor needs. Decided by the mode, not by the address the request
+		// arrived on, which over the setup network is as likely IPv6 as the
+		// setup IPv4 address. The API is left alone, because the setup page
+		// asks it whether setup is over.
+		if s.setupIP != nil && !strings.HasPrefix(r.URL.Path, "/api/") &&
+			(s.inSetupMode() || localIP(r).Equal(s.setupIP)) {
 			http.Redirect(rec, r, "http://"+s.setupIP.String()+"/", http.StatusFound)
 			return
 		}
 		next.ServeHTTP(rec, r)
 	})
+}
+
+func (s *Server) inSetupMode() bool {
+	return s.deps.Setup != nil && s.deps.Setup.InSetupMode()
 }
 
 // localIP is the address a request arrived on, which tells the setup network

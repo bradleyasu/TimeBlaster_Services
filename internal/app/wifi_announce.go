@@ -43,6 +43,7 @@ func (w announcingWiFi) ExitSetupMode(ctx context.Context) error {
 // announceWiFiSetup shows SETUP on the display, lights the Wi-Fi LED and puts a
 // notice on the television.
 func (a *App) announceWiFiSetup() {
+	a.inSetup.Store(true)
 	if a.nano != nil {
 		a.showNanoText("SETUP")
 		if err := a.nano.SetLED(protocol.LEDWiFi, true); err != nil {
@@ -74,6 +75,7 @@ func (a *App) announceWiFiFailed() {
 
 // announceWiFiNormal returns the display and the LED to their resting state.
 func (a *App) announceWiFiNormal() {
+	a.inSetup.Store(false)
 	if a.nano == nil {
 		return
 	}
@@ -81,6 +83,33 @@ func (a *App) announceWiFiNormal() {
 	if err := a.nano.SetLED(protocol.LEDWiFi, false); err != nil {
 		a.log.Debug("could not put the Wi-Fi LED out", "error", err)
 	}
+}
+
+// InSetupMode reports whether the Timeblaster is in Wi-Fi setup mode, which is
+// what the companion app's server needs to send a visitor to the setup page.
+func (a *App) InSetupMode() bool { return a.inSetup.Load() }
+
+// adoptSetupModeAtStartup picks up a setup mode already under way when the
+// daemon starts -- it restarted while the helper had the access point up --
+// so the display, the escape hatch and the setup-page hand-off all know.
+func (a *App) adoptSetupModeAtStartup(ctx context.Context) error {
+	timer := a.clock.NewTimer(remoteStartupDelay)
+	select {
+	case <-ctx.Done():
+		timer.Stop()
+		return ctx.Err()
+	case <-timer.C():
+	}
+	sctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	st, err := a.wifi.Status(sctx)
+	cancel()
+	if err == nil && st.Mode == wifi.ModeSetup {
+		a.log.Info("Wi-Fi setup mode was already active at startup")
+		a.announceWiFiSetup()
+		go a.watchSetupMode()
+	}
+	<-ctx.Done()
+	return ctx.Err()
 }
 
 // watchSetupMode polls the helper until setup mode ends, then clears the

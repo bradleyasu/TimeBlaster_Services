@@ -310,6 +310,16 @@ func portalHTML(setupSSID, appURL string) string {
   .msg.err { background: #2a0f0f; border: 1px solid var(--error); color: var(--error); }
   .msg.busy { background: #17210f; border: 1px solid var(--dim); color: var(--dim); }
   .hint { color: var(--dim); font-size: 12px; margin-top: 18px; }
+  button.secondary {
+    background: transparent; color: var(--green); border: 1px solid var(--edge);
+    margin-top: 10px; font-weight: 400;
+  }
+  .open-app {
+    display: none; margin-top: 14px; padding: 12px; text-align: center;
+    border: 1px solid var(--green); border-radius: 8px; color: var(--green);
+    text-decoration: none; letter-spacing: .08em; font-weight: 700;
+  }
+  .open-app.show { display: block; }
 </style>
 </head>
 <body>
@@ -331,13 +341,19 @@ func portalHTML(setupSSID, appURL string) string {
     <input type="password" id="psk" placeholder="Leave blank for an open network" autocapitalize="none" autocorrect="off">
 
     <button id="go">CONNECT</button>
+    <button id="rescan" class="secondary">SCAN AGAIN</button>
     <div id="msg" class="msg"></div>
+    <a id="open-app" class="open-app" href="` + appHTML + `/">OPEN THE TIMEBLASTER APP</a>
   </div>
 
   <p class="hint">
     After you press Connect this setup network disappears and the Timeblaster joins
     yours. Keep this page open: once your phone is back on your Wi-Fi it opens the
     companion app by itself, at <strong>` + appHTML + `</strong>.
+  </p>
+  <p class="hint">
+    Changed your mind? Hold the Wi-Fi button on the Timeblaster for five seconds
+    again: setup is cancelled and it rejoins the network it was on.
   </p>
 </div>
 <script>
@@ -359,27 +375,44 @@ func portalHTML(setupSSID, appURL string) string {
     sel.style.display = manual.checked ? 'none' : 'block';
   });
 
+  var rescan = document.getElementById('rescan');
+  var openApp = document.getElementById('open-app');
+
+  // A scan that fails leaves the list as it was. Wiping it left nothing to
+  // choose from and no way to try again -- the one dead end this page must
+  // never have.
   function scan() {
+    rescan.disabled = true;
     fetch('/api/networks')
       .then(function (r) { return r.json(); })
       .then(function (d) {
-        sel.innerHTML = '';
+        rescan.disabled = false;
         var nets = d.networks || [];
         if (!nets.length) {
-          sel.innerHTML = '<option value="">No networks found</option>';
+          if (!sel.options.length || !sel.value) {
+            sel.innerHTML = '<option value="">No networks found</option>';
+          }
           return;
         }
+        var keep = sel.value;
+        sel.innerHTML = '';
         nets.forEach(function (n) {
           var o = document.createElement('option');
           o.value = n.ssid;
           o.textContent = n.ssid + '  (' + (n.signal || 0) + '%)' + (n.security ? ' \u{1F512}' : '');
+          if (n.ssid === keep) o.selected = true;
           sel.appendChild(o);
         });
       })
       .catch(function () {
-        sel.innerHTML = '<option value="">Scan failed</option>';
+        rescan.disabled = false;
+        if (!sel.options.length || !sel.value) {
+          sel.innerHTML = '<option value="">Could not scan: tap SCAN AGAIN</option>';
+        }
       });
   }
+
+  rescan.addEventListener('click', scan);
 
   var APP = ` + string(appJS) + `;
   var SETUP_SSID = ` + string(ssidJS) + `;
@@ -397,16 +430,45 @@ func portalHTML(setupSSID, appURL string) string {
   function failed(text) {
     attempt++;
     go.disabled = false;
+    openApp.className = 'open-app';
     show('err', text);
     scan();
   }
 
+  // Setup mode is back. With an error, joining failed and the Timeblaster
+  // raised setup again so another try is possible; without one, setup was
+  // simply started again -- the Wi-Fi button held a second time.
+  function setupBack(st) {
+    if (st.last_error) {
+      failed(st.last_error + ' Check the password, then try again.');
+    } else {
+      failed('Setup mode started again on the Timeblaster. Choose your network and try again.');
+    }
+  }
+
   function watch(ssid) {
     var mine = ++attempt;
-    var deadline = Date.now() + 3 * 60 * 1000;
-    show('busy', 'Joining "' + ssid + '"\u2026 This setup network is shutting down, and your ' +
-      'phone will go back to your own Wi-Fi by itself. Keep this page open: it opens the ' +
-      'Timeblaster app as soon as both are on your network.');
+    var started = Date.now();
+    var deadline = started + 3 * 60 * 1000;
+
+    // Progress, so a wait never looks like a hang: the elapsed time, and what
+    // to do if the phone is slow to go back to its own Wi-Fi.
+    function progress() {
+      if (mine !== attempt) return;
+      var secs = Math.round((Date.now() - started) / 1000);
+      var text = 'Joining "' + ssid + '"\u2026 ' + secs + 's\n\n' +
+        'This setup network shuts down while the Timeblaster joins yours, and your phone ' +
+        'goes back to your own Wi-Fi. Keep this page open: it opens the Timeblaster app ' +
+        'as soon as both are on your network.';
+      if (secs >= 15) {
+        text += '\n\nIf your phone has not gone back to "' + ssid + '" by itself, choose it ' +
+          'in Settings \u2192 Wi-Fi, then come back here. Or tap below once you are on it.';
+        openApp.className = 'open-app show';
+      }
+      show('busy', text);
+      setTimeout(progress, 1000);
+    }
+    progress();
 
     function again() { setTimeout(poll, 2000); }
 
@@ -431,8 +493,8 @@ func portalHTML(setupSSID, appURL string) string {
       get(APP + '/api/wifi/status').then(function (st) {
         if (mine !== attempt) return;
         if (st.mode === 'setup') {
-          // Reached over the setup network, which is up again: it failed.
-          failed((st.last_error || 'Could not join that network.') + ' Check the password and try again.');
+          // Reached over the setup network, which is up again.
+          setupBack(st);
           return;
         }
         if (st.connected) {
@@ -443,6 +505,7 @@ func portalHTML(setupSSID, appURL string) string {
             setTimeout(function () { location.href = APP + '/'; }, 4000);
             return;
           }
+          attempt++; // done: stop the progress messages
           show('ok', 'Connected to "' + ssid + '". Opening the Timeblaster app\u2026');
           location.href = APP + '/';
           return;
@@ -454,7 +517,7 @@ func portalHTML(setupSSID, appURL string) string {
         get('/api/status').then(function (st) {
           if (mine !== attempt) return;
           if (st.mode === 'setup') {
-            failed((st.last_error || 'Could not join that network.') + ' Check the password and try again.');
+            setupBack(st);
             return;
           }
           again();

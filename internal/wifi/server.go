@@ -35,6 +35,10 @@ type Server struct {
 	// flasher is set once, before Listen, by EnableFirmwareFlashing.
 	flasher *firmwareFlasher
 
+	// netOp serialises everything that changes the network: entering and
+	// leaving setup mode, and joining. Each runs whole or not at all.
+	netOp sync.Mutex
+
 	mu sync.Mutex
 	// mode is the current networking mode.
 	mode Mode
@@ -279,6 +283,13 @@ func (s *Server) Scan(ctx context.Context) ([]Network, error) {
 
 // EnterSetup raises the access point and starts the captive portal.
 func (s *Server) EnterSetup(ctx context.Context) error {
+	s.netOp.Lock()
+	defer s.netOp.Unlock()
+	return s.enterSetup(ctx)
+}
+
+// enterSetup is EnterSetup for a caller already holding netOp.
+func (s *Server) enterSetup(ctx context.Context) error {
 	s.mu.Lock()
 	if s.mode == ModeSetup {
 		s.mu.Unlock()
@@ -337,7 +348,7 @@ func (s *Server) EnterSetup(ctx context.Context) error {
 		// ExitSetup does the whole rollback: cancel the setup context, stop the
 		// portal, tear the access point down and restore the previous network.
 		s.log.Error("could not start the captive portal; leaving setup mode again", "error", err)
-		if exitErr := s.ExitSetup(ctx); exitErr != nil {
+		if exitErr := s.exitSetup(ctx); exitErr != nil {
 			s.log.Error("could not roll back after the portal failed to start", "error", exitErr)
 		}
 		s.setError(err.Error())
@@ -371,6 +382,13 @@ func (s *Server) expireSetup(ctx context.Context, d time.Duration) {
 
 // ExitSetup tears the access point down and restores normal networking.
 func (s *Server) ExitSetup(ctx context.Context) error {
+	s.netOp.Lock()
+	defer s.netOp.Unlock()
+	return s.exitSetup(ctx)
+}
+
+// exitSetup is ExitSetup for a caller already holding netOp.
+func (s *Server) exitSetup(ctx context.Context) error {
 	s.mu.Lock()
 	if s.mode != ModeSetup {
 		s.mu.Unlock()
@@ -423,6 +441,15 @@ func (s *Server) teardownAP(ctx context.Context) {
 // credentials are still on disk and we simply bring them back up. A failed
 // attempt can therefore never strand the device on a network it cannot reach.
 func (s *Server) Connect(ctx context.Context, ssid, passphrase string, hidden bool) (ConnectResult, error) {
+	// One network change at a time. Cancelling setup from the button while an
+	// attempt is under way would otherwise bring up the old network in the
+	// middle of joining the new one, and leave neither.
+	s.netOp.Lock()
+	defer s.netOp.Unlock()
+	return s.connect(ctx, ssid, passphrase, hidden)
+}
+
+func (s *Server) connect(ctx context.Context, ssid, passphrase string, hidden bool) (ConnectResult, error) {
 	if err := ValidateCredentials(ssid, passphrase); err != nil {
 		return ConnectResult{Success: false, SSID: ssid, Message: err.Error()}, err
 	}
@@ -512,7 +539,7 @@ func (s *Server) rollback(ctx context.Context, previous string, wasSetup bool) b
 	if !restored {
 		// Nothing to fall back to, so put the access point back up: the user
 		// has no other way to reach the device and try a different password.
-		if err := s.EnterSetup(ctx); err != nil {
+		if err := s.enterSetup(ctx); err != nil {
 			s.log.Error("could not restore setup mode after a failed attempt", "error", err)
 		}
 		return restored

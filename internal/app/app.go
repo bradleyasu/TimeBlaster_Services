@@ -83,6 +83,8 @@ type App struct {
 	// audioOutMu serialises switching the television's audio, which the app
 	// and the audio knob can both ask for at once.
 	audioOutMu sync.Mutex
+	// inSetup is set while Wi-Fi setup mode is active, as announced.
+	inSetup atomic.Bool
 	// knobWork tracks switches the audio knob has started in the background,
 	// so shutdown can let them finish before the database closes under them.
 	knobWork sync.WaitGroup
@@ -542,7 +544,7 @@ func (a *App) initWeb() error {
 	srv, err := web.NewServer(a.cfg.Web, web.Deps{
 		Config: a.cfg, Alarms: a.scheduler, Audio: a.audio, Media: mediaSvc,
 		Hardware: a.hardwareStatus(), Inputs: a.router, WiFi: a.wifi,
-		Settings: a, Snapshots: a, Firmware: a, WebSocket: http.Handler(a.hub),
+		Settings: a, Snapshots: a, Firmware: a, Setup: a, WebSocket: http.Handler(a.hub),
 		Logger: a.log.With("component", "web"), Version: a.version,
 	})
 	if err != nil {
@@ -581,6 +583,7 @@ func (a *App) registerTasks() {
 	a.sup.add("clock-broadcast", false, a.runClockBroadcast)
 	a.sup.add("sound-library-refresh", false, a.runLibraryRefresh)
 	a.sup.add("remote-access", false, a.applyRemoteAccessAtStartup)
+	a.sup.add("wifi-setup-check", false, a.adoptSetupModeAtStartup)
 	a.sup.add("alarm-indicator", false, a.runAlarmIndicator)
 }
 
