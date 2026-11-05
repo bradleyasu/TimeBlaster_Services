@@ -105,3 +105,22 @@ func TestCancellingSetupDoesNotClaimItConnected(t *testing.T) {
 		t.Error("cancelling did not say bAcK")
 	}
 }
+
+func TestTheWiFiIndicatorFollowsTheConnection(t *testing.T) {
+	h := newHarness(t, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = h.app.runWiFiIndicator(ctx) }()
+	waitFor(t, "online", h.app.wifiOnline.Load)
+
+	// Setup mode is off the home network: the symbol says so at once.
+	holdWiFi(h)
+	waitFor(t, "offline in setup", func() bool { return !h.app.wifiOnline.Load() })
+
+	// And Connected brings it back at once, without waiting for a check.
+	helperEndsSetup(t, h)
+	waitFor(t, "back online", func() bool {
+		h.clock.Advance(time.Second)
+		return h.app.wifiOnline.Load()
+	})
+}

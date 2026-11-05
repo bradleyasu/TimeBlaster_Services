@@ -87,7 +87,10 @@ shows whichever channel it now points at.
   channel knob points at plays in the top-left quarter; the rest of the screen
   shows the time, what is on that channel now, and a 90-minute grid of every
   channel, five at a time, turning the page every 8 seconds
-  (`guide.page_interval`). Changing channel jumps to its page. The display
+  (`guide.page_interval`). Changing channel jumps to its page. Beside the
+  clock, a Wi-Fi symbol shows whether the Timeblaster is on the home Wi-Fi:
+  slime green when it is, dimmed with a red slash when it is not -- including
+  during Wi-Fi setup mode, when it is on its own network instead. The display
   shows `Ch.02`, as in TV mode.
 * **Ambience** -- looping local videos. Each channel is a numbered folder under
   `/srv/timeblaster/ambient` (`ambience.dir`):

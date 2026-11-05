@@ -631,3 +631,84 @@ func TestListingsAreReadFromTheGridsFirstColumn(t *testing.T) {
 		t.Errorf("listings read from %s, want the grid's start %s", f.tv.from.In(et).Format("15:04"), want.Format("15:04"))
 	}
 }
+
+// shapes returns the vector drawings in an overlay, by colour.
+func shapes(ass, color string) []string {
+	var out []string
+	for _, l := range strings.Split(ass, "\n") {
+		if strings.Contains(l, `\p1}`) && strings.Contains(l, `\c`+assColor(color)) {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// xs returns every x coordinate in a drawing.
+func xs(drawing string) []float64 {
+	body := drawing[strings.Index(drawing, `\p1}`)+4 : strings.Index(drawing, `{\p0}`)]
+	var out []float64
+	fields := strings.Fields(body)
+	for i := 0; i < len(fields); i++ {
+		if fields[i] == "m" || fields[i] == "l" || fields[i] == "b" {
+			continue
+		}
+		var x float64
+		fmt.Sscanf(fields[i], "%f", &x)
+		out = append(out, x)
+		i++ // skip the y
+	}
+	return out
+}
+
+func TestTheWiFiSymbolShowsTheConnection(t *testing.T) {
+	on := Render(Frame{Now: at(22, 47), Channels: lineup(1), WiFi: true})
+	off := Render(Frame{Now: at(22, 47), Channels: lineup(1), WiFi: false})
+
+	if len(shapes(on, colOffline)) != 0 {
+		t.Error("a connected Timeblaster's symbol has the slash")
+	}
+	if len(shapes(off, colOffline)) == 0 {
+		t.Error("a disconnected Timeblaster's symbol has no slash")
+	}
+	// Connected: drawn in the accent; disconnected: dimmed.
+	if n := len(shapes(on, colAccent)) - len(shapes(off, colAccent)); n < 3 {
+		t.Errorf("the connected symbol is not in the accent colour (%d more accent shapes)", n)
+	}
+}
+
+func TestTheWiFiSymbolSitsBetweenTheHeaderAndTheClock(t *testing.T) {
+	for _, h24 := range []bool{false, true} {
+		f := Frame{Now: at(22, 47), Clock24h: h24, Channels: lineup(1), WiFi: false}
+		ass := Render(f)
+		clockLeft := float64(panelRight) - float64(len([]rune(timeText(f.Now, h24))))*34*charWidth
+		headerRight := float64(panelX) + float64(len("TIMEBLASTER GUIDE"))*30*charWidth
+		var lo, hi float64 = 1e9, -1e9
+		for _, d := range append(shapes(ass, colSubtle), shapes(ass, colOffline)...) {
+			for _, x := range xs(d) {
+				lo, hi = min(lo, x), max(hi, x)
+			}
+		}
+		if hi > clockLeft-4 {
+			t.Errorf("24h=%v: the symbol (right edge %.0f) runs into the clock (left edge %.0f)", h24, hi, clockLeft)
+		}
+		if lo < headerRight+4 {
+			t.Errorf("24h=%v: the symbol (left edge %.0f) runs into the header (right edge %.0f)", h24, lo, headerRight)
+		}
+	}
+}
+
+func TestTheGuideAsksForTheWiFiStateOnEveryDraw(t *testing.T) {
+	f := newFixture(t, 3)
+	online := true
+	f.m.opts.WiFiConnected = func() bool { return online }
+	f.m.Activate()
+	_ = f.m.SelectBand(context.Background(), 0)
+	if len(shapes(f.lastDraw(), colOffline)) != 0 {
+		t.Fatal("drawn as offline while online")
+	}
+	online = false
+	_ = f.m.draw(context.Background(), false)
+	if len(shapes(f.lastDraw(), colOffline)) == 0 {
+		t.Error("going offline did not redraw the symbol")
+	}
+}

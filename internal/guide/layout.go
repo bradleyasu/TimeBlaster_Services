@@ -2,6 +2,7 @@ package guide
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -69,6 +70,9 @@ type Frame struct {
 	// old channel's last frame until the new one decodes, which under the new
 	// channel's listing reads as the wrong programme.
 	Tuning bool
+	// WiFi is whether the Timeblaster is on the home Wi-Fi, shown as a symbol
+	// beside the clock.
+	WiFi bool
 }
 
 // Pages reports how many pages of rows the channels need.
@@ -127,7 +131,12 @@ const (
 func renderPanel(b *strings.Builder, f Frame) {
 	x := panelX
 	text(b, x, 20, 7, 28, colBrand, true, "TIMEBLASTER GUIDE")
-	text(b, panelRight, 16, 9, 34, colText, true, timeText(f.Now, f.Clock24h))
+	clock := timeText(f.Now, f.Clock24h)
+	text(b, panelRight, 16, 9, 34, colText, true, clock)
+	// The Wi-Fi symbol sits just left of the clock, its base level with the
+	// bottom of the digits.
+	clockW := int(float64(utf8.RuneCountInString(clock)) * 34 * charWidth)
+	wifiIcon(b, panelRight-clockW-20-wifiIconR, 52, f.WiFi)
 	text(b, x, 60, 7, 20, colAccent, false, strings.ToUpper(f.Now.Format("Monday, Jan 2")))
 
 	ch := find(f.Channels, f.Playing)
@@ -220,6 +229,65 @@ func renderRow(b *strings.Builder, ch ersatztv.GuideChannel, y int, playing bool
 		rect(b, timeX+gap, y+gap, timeW-2*gap, rowH-2*gap, progFill)
 		text(b, timeX+gap+8, y+rowH/2, 4, 24, colSubtle, false, "NO LISTINGS")
 	}
+}
+
+// The Wi-Fi symbol: a dot and two arcs, the radius of the outermost.
+const wifiIconR = 27
+
+// colOffline slashes the Wi-Fi symbol when the Timeblaster is off the network.
+const colOffline = "#FF4D5E"
+
+// wifiIcon draws the Wi-Fi symbol with its point at (cx, cy): the familiar
+// fan of arcs, in the accent colour when connected; dimmed, with a slash
+// through it, when not. Drawn as shapes because the guide's font has no such
+// glyph -- each arc is a quarter-circle wedge with the next one cut out of it
+// in the background colour, which is how the bands appear.
+func wifiIcon(b *strings.Builder, cx, cy int, connected bool) {
+	col := colAccent
+	if !connected {
+		col = colSubtle
+	}
+	r := float64(wifiIconR)
+	for i, rr := range []float64{r, r * 0.74, r * 0.52, r * 0.28, r * 0.14} {
+		fill := col
+		if i%2 == 1 {
+			fill = colBackground
+		}
+		wedge(b, cx, cy, rr, fill)
+	}
+	if !connected {
+		// A slash, outlined in the background so it reads against the arcs.
+		x0, y0 := float64(cx)-r*0.85, float64(cy)+2
+		x1, y1 := float64(cx)+r*0.85, float64(cy)-r-2
+		bar(b, x0, y0, x1, y1, 7, colBackground)
+		bar(b, x0, y0, x1, y1, 3.5, colOffline)
+	}
+}
+
+// wedge fills a 90-degree sector pointing up, its tip at (cx, cy): two
+// straight sides and a cubic Bezier for the arc.
+func wedge(b *strings.Builder, cx, cy int, r float64, color string) {
+	const s = 0.70710678 // sin and cos of 45 degrees
+	const k = 0.55228475 // a quarter circle's Bezier handle, as a fraction of r
+	x, y := float64(cx), float64(cy)
+	p0x, p0y := x-r*s, y-r*s
+	p3x, p3y := x+r*s, y-r*s
+	p1x, p1y := p0x+k*r*s, p0y-k*r*s
+	p2x, p2y := p3x-k*r*s, p3y-k*r*s
+	fmt.Fprintf(b, "{\\an7\\pos(0,0)\\bord0\\shad0\\c%s\\p1}m %.1f %.1f l %.1f %.1f b %.1f %.1f %.1f %.1f %.1f %.1f l %.1f %.1f{\\p0}\n",
+		assColor(color), x, y, p0x, p0y, p1x, p1y, p2x, p2y, p3x, p3y, x, y)
+}
+
+// bar fills a straight stroke of a width from one point to another.
+func bar(b *strings.Builder, x0, y0, x1, y1, width float64, color string) {
+	dx, dy := x1-x0, y1-y0
+	n := math.Hypot(dx, dy)
+	if n == 0 {
+		return
+	}
+	ox, oy := -dy/n*width/2, dx/n*width/2
+	fmt.Fprintf(b, "{\\an7\\pos(0,0)\\bord0\\shad0\\c%s\\p1}m %.1f %.1f l %.1f %.1f l %.1f %.1f l %.1f %.1f{\\p0}\n",
+		assColor(color), x0+ox, y0+oy, x1+ox, y1+oy, x1-ox, y1-oy, x0-ox, y0-oy)
 }
 
 // --- drawing primitives ----------------------------------------------------

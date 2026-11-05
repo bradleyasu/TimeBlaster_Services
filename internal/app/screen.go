@@ -43,7 +43,8 @@ func (a *App) initScreen() error {
 		Clock24h: func() bool {
 			return storage.GetBool(a.store, storage.KeyClock24h, a.cfg.General.Clock24h)
 		},
-		Location: func() *time.Location { return a.scheduler.Location() },
+		Location:      func() *time.Location { return a.scheduler.Location() },
+		WiFiConnected: a.wifiOnline.Load,
 	}, guide.Deps{
 		Player: a.tvPlayer, TV: a.media, Clock: a.clock,
 		Logger: a.log.With("component", "guide"),

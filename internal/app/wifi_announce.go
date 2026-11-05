@@ -44,6 +44,7 @@ func (w announcingWiFi) ExitSetupMode(ctx context.Context) error {
 // notice on the television.
 func (a *App) announceWiFiSetup() {
 	a.inSetup.Store(true)
+	a.wifiOnline.Store(false)
 	if a.nano != nil {
 		a.showNanoText("SETUP")
 		if err := a.nano.SetLED(protocol.LEDWiFi, true); err != nil {
@@ -78,6 +79,7 @@ func (a *App) announceWiFiFailed() {
 // and its page can tell nobody anything -- then returns to the clock.
 func (a *App) announceWiFiConnected() {
 	a.inSetup.Store(false)
+	a.wifiOnline.Store(true)
 	if a.nano == nil {
 		return
 	}
@@ -97,6 +99,34 @@ func (a *App) announceWiFiNormal() {
 	a.showNanoClock()
 	if err := a.nano.SetLED(protocol.LEDWiFi, false); err != nil {
 		a.log.Debug("could not put the Wi-Fi LED out", "error", err)
+	}
+}
+
+// wifiCheckInterval is how often the Wi-Fi indicator is brought up to date.
+// Each check runs nmcli in the helper, so not every second; entering setup and
+// joining update it at once anyway.
+const wifiCheckInterval = 10 * time.Second
+
+// runWiFiIndicator keeps wifiOnline current for the guide's Wi-Fi symbol: on
+// the home network, in normal mode. Setup mode counts as off it, which is true
+// -- the Timeblaster is on its own network then.
+func (a *App) runWiFiIndicator(ctx context.Context) error {
+	for {
+		sctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		st, err := a.wifi.Status(sctx)
+		cancel()
+		online := err == nil && st.Mode == wifi.ModeNormal && st.Connected
+		if was := a.wifiOnline.Swap(online); was != online {
+			a.log.Info("Wi-Fi indicator", "connected", online, "ssid", st.SSID)
+		}
+
+		timer := a.clock.NewTimer(wifiCheckInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C():
+		}
 	}
 }
 

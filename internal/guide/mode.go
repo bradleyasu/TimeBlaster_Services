@@ -49,6 +49,9 @@ type Options struct {
 	// Clock24h and Location follow the user's settings as they change.
 	Clock24h func() bool
 	Location func() *time.Location
+	// WiFiConnected reports whether the Timeblaster is on the home Wi-Fi. Read
+	// on every draw, so it must be cheap: a cached answer, not a query.
+	WiFiConnected func() bool
 }
 
 // Deps are the guide's collaborators.
@@ -125,6 +128,9 @@ func New(opts Options, d Deps) *Mode {
 	}
 	if opts.Location == nil {
 		opts.Location = func() *time.Location { return time.Local }
+	}
+	if opts.WiFiConnected == nil {
+		opts.WiFiConnected = func() bool { return true }
 	}
 	return &Mode{opts: opts, player: d.Player, tv: d.TV, clock: d.Clock, log: d.Logger}
 }
@@ -360,6 +366,7 @@ func (m *Mode) frame(ctx context.Context) Frame {
 		Playing:  playing,
 		Page:     m.page,
 		Tuning:   m.tuning,
+		WiFi:     m.opts.WiFiConnected(),
 	}
 }
 

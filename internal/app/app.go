@@ -85,6 +85,9 @@ type App struct {
 	audioOutMu sync.Mutex
 	// inSetup is set while Wi-Fi setup mode is active, as announced.
 	inSetup atomic.Bool
+	// wifiOnline is whether the Timeblaster is on the home Wi-Fi, for the
+	// guide's indicator; kept current by runWiFiIndicator.
+	wifiOnline atomic.Bool
 	// knobWork tracks switches the audio knob has started in the background,
 	// so shutdown can let them finish before the database closes under them.
 	knobWork sync.WaitGroup
@@ -584,6 +587,7 @@ func (a *App) registerTasks() {
 	a.sup.add("sound-library-refresh", false, a.runLibraryRefresh)
 	a.sup.add("remote-access", false, a.applyRemoteAccessAtStartup)
 	a.sup.add("wifi-setup-check", false, a.adoptSetupModeAtStartup)
+	a.sup.add("wifi-indicator", false, a.runWiFiIndicator)
 	a.sup.add("alarm-indicator", false, a.runAlarmIndicator)
 }
 
