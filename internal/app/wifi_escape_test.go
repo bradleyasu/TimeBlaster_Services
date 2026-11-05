@@ -58,3 +58,50 @@ func countOf(xs []string, s string) int {
 	}
 	return n
 }
+
+// helperEndsSetup plays the helper finishing setup by itself -- a successful
+// join -- which the daemon only learns by watching.
+func helperEndsSetup(t *testing.T, h *harness) {
+	t.Helper()
+	if err := h.wifi.ExitSetupMode(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTheDisplaySaysConnectedWhenSetupSucceeds(t *testing.T) {
+	// The phone that did the setup is between networks and its page can tell
+	// nobody anything. The display can.
+	h := newHarness(t, nil)
+	holdWiFi(h)
+	waitFor(t, "setup mode", h.app.InSetupMode)
+	h.nano.Reset()
+
+	helperEndsSetup(t, h)
+	waitFor(t, "CONNECTED", func() bool {
+		h.clock.Advance(time.Second)
+		return displayed(h, "Connected")
+	})
+	if h.app.InSetupMode() {
+		t.Error("still believed to be in setup mode")
+	}
+}
+
+func TestCancellingSetupDoesNotClaimItConnected(t *testing.T) {
+	// The button's way back says bAcK. Following it with Connected would
+	// suggest the setup had worked.
+	h := newHarness(t, nil)
+	holdWiFi(h)
+	waitFor(t, "setup mode", h.app.InSetupMode)
+	holdWiFi(h) // cancel
+	waitFor(t, "cancelled", func() bool { return !h.app.InSetupMode() })
+	for range 10 {
+		h.clock.Advance(time.Second)
+		time.Sleep(2 * time.Millisecond)
+	}
+	if displayed(h, "Connected") {
+		t.Error("a cancelled setup claimed to have connected")
+	}
+	if !displayed(h, "bAcK") {
+		t.Error("cancelling did not say bAcK")
+	}
+}

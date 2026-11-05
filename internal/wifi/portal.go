@@ -450,16 +450,26 @@ func portalHTML(setupSSID, appURL string) string {
     var mine = ++attempt;
     var started = Date.now();
     var deadline = started + 3 * 60 * 1000;
+    // gone is set once the setup network has stopped answering: the
+    // Timeblaster is joining, and this page can hear nothing until the phone
+    // is back on the home Wi-Fi. The Timeblaster's display can, though.
+    var gone = false;
 
     // Progress, so a wait never looks like a hang: the elapsed time, and what
     // to do if the phone is slow to go back to its own Wi-Fi.
     function progress() {
       if (mine !== attempt) return;
       var secs = Math.round((Date.now() - started) / 1000);
-      var text = 'Joining "' + ssid + '"\u2026 ' + secs + 's\n\n' +
-        'This setup network shuts down while the Timeblaster joins yours, and your phone ' +
-        'goes back to your own Wi-Fi. Keep this page open: it opens the Timeblaster app ' +
-        'as soon as both are on your network.';
+      var text;
+      if (!gone) {
+        text = 'Sending your Wi-Fi details to the Timeblaster\u2026 ' + secs + 's';
+      } else {
+        text = 'The setup network has closed, and the Timeblaster is joining "' + ssid +
+          '"\u2026 ' + secs + 's\n\n' +
+          'Watch its display: it says CONNECTED as soon as it is on your Wi-Fi.\n\n' +
+          'Meanwhile your phone is going back to your Wi-Fi. Keep this page open: it opens ' +
+          'the Timeblaster app once both are there.';
+      }
       if (secs >= 15) {
         text += '\n\nIf your phone has not gone back to "' + ssid + '" by itself, choose it ' +
           'in Settings \u2192 Wi-Fi, then come back here. Or tap below once you are on it.';
@@ -521,7 +531,10 @@ func portalHTML(setupSSID, appURL string) string {
             return;
           }
           again();
-        }, again);
+        }, function () {
+          gone = true; // the setup network has stopped answering
+          again();
+        });
       });
     }
     // Give the setup network a moment to go before looking for the outcome.

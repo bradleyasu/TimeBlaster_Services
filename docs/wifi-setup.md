@@ -92,7 +92,11 @@ scheduled locally, stored locally, and ring locally.
 6. Enter the password and tap **CONNECT**.
 
 The access point has to come down before the radio can join your network, so
-the page cannot hear the result directly. Instead it watches for it: your phone
+for a few seconds your phone is between networks and the page can hear
+nothing. **The Timeblaster's display can: it scrolls `Connected` as soon as it
+has joined**, then returns to the clock. The page says so while you wait.
+
+The page cannot hear the result directly. Instead it watches for it: your phone
 drops back to your own Wi-Fi by itself, and as soon as the Timeblaster appears
 there -- joined to the network you chose -- the page opens the companion app,
 where it offers to add itself to your home screen. If setup mode comes back

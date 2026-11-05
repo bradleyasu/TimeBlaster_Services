@@ -73,6 +73,21 @@ func (a *App) announceWiFiFailed() {
 	})
 }
 
+// announceWiFiConnected says, on the display, that setup worked -- while the
+// phone that did the setup is still finding its way back to the same network
+// and its page can tell nobody anything -- then returns to the clock.
+func (a *App) announceWiFiConnected() {
+	a.inSetup.Store(false)
+	if a.nano == nil {
+		return
+	}
+	if err := a.nano.SetLED(protocol.LEDWiFi, false); err != nil {
+		a.log.Debug("could not put the Wi-Fi LED out", "error", err)
+	}
+	// Long enough for the word to scroll past twice.
+	a.flashNanoText("Connected", 8*time.Second)
+}
+
 // announceWiFiNormal returns the display and the LED to their resting state.
 func (a *App) announceWiFiNormal() {
 	a.inSetup.Store(false)
@@ -123,7 +138,11 @@ func (a *App) adoptSetupModeAtStartup(ctx context.Context) error {
 // The poll runs only while setup is believed to be active, so an idle
 // Timeblaster still polls nothing.
 func (a *App) watchSetupMode() {
-	const interval = 5 * time.Second
+	// Often enough that CONNECTED is on the display within moments of the
+	// join: it is the only feedback anyone has while their phone is between
+	// networks. The helper answers over a local socket, so this costs little,
+	// and only runs during setup.
+	const interval = 2 * time.Second
 	// Outlast the helper's own timeout, then give up rather than poll forever.
 	deadline := a.clock.Now().Add(a.cfg.WiFi.SetupTimeout.Duration + 2*time.Minute)
 
@@ -140,6 +159,15 @@ func (a *App) watchSetupMode() {
 			continue
 		}
 		if st.Mode != wifi.ModeSetup {
+			// Cancelled from the button: that path has already said so.
+			if !a.inSetup.Load() {
+				return
+			}
+			if st.Connected {
+				a.log.Info("Wi-Fi setup mode ended; connected", "ssid", st.SSID)
+				a.announceWiFiConnected()
+				return
+			}
 			a.log.Info("Wi-Fi setup mode ended; returning the display to the clock",
 				"mode", st.Mode, "ssid", st.SSID)
 			a.announceWiFiNormal()

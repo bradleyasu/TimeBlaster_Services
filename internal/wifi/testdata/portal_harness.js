@@ -14,7 +14,9 @@ function run(name, routes, expect) {
       rescan: el(), 'open-app': el() };
     els.ssid.options = [{}];
     // Remember whether the "open the app" link was ever shown.
-    let appLinkShown = false, cls = '';
+    let appLinkShown = false, cls = '', sawDisplayHint = false, msgText = '';
+    Object.defineProperty(els.msg, 'textContent', {
+      get: () => msgText, set: (v) => { msgText = v; if (/CONNECTED/.test(v)) sawDisplayHint = true; } });
     Object.defineProperty(els['open-app'], 'className', {
       get: () => cls, set: (v) => { cls = v; if (/show/.test(v)) appLinkShown = true; } });
     els.ssid.value = 'Home';
@@ -48,7 +50,7 @@ function run(name, routes, expect) {
     function finish() {
       if (done) return; done = true;
       const ok = expect({ href: location.href, msg: els.msg.textContent, kind: els.msg.className,
-        btn: els.go.disabled, t: now, list: els.ssid.innerHTML, appLinkShown });
+        btn: els.go.disabled, t: now, list: els.ssid.innerHTML, appLinkShown, sawDisplayHint });
       console.log((ok ? 'PASS ' : 'FAIL ') + name + ' | ' + location.href + ' | ' + els.msg.className + ' | ' + els.msg.textContent.slice(0, 90));
       resolve(ok);
     }
@@ -82,6 +84,9 @@ const scenarios = [
   ['a slow phone gets the app link, then the app', (u, n) => u === '/api/networks' ? { networks: [] } :
       u === APP ? (n < 12 ? 'down' : { mode: 'normal', connected: true, ssid: 'Home' }) : 'down',
     (r) => r.appLinkShown && r.href === 'http://timeblaster.local:8080/' && r.t >= 15000],
+  ['the gap: points at the display once the setup network has gone', (u, n) => u === '/api/networks' ? { networks: [] } :
+      u === APP ? (n < 4 ? 'down' : { mode: 'normal', connected: true, ssid: 'Home' }) : 'down',
+    (r) => r.sawDisplayHint && r.href === 'http://timeblaster.local:8080/'],
   ['never appears: gives up after three minutes', (u) => u === '/api/networks' ? { networks: [] } : 'down',
     (r) => r.href === 'http://10.42.0.1/' && /has not appeared/.test(r.msg) && !r.btn && r.t >= 180000],
 ];
