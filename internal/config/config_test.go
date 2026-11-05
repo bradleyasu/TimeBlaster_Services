@@ -331,3 +331,19 @@ func TestShippedConfigMatchesDefaults(t *testing.T) {
 		}
 	}
 }
+
+func TestAppURL(t *testing.T) {
+	c := Default()
+	if got := c.AppURL(); got != "http://timeblaster.local:8080" {
+		t.Errorf("default: %q", got)
+	}
+	c.General.Hostname = "den"
+	c.Web.ListenAddress = ":80"
+	if got := c.AppURL(); got != "http://den.local" {
+		t.Errorf("port 80 is left implicit: %q", got)
+	}
+	c.Web.ListenAddress = "0.0.0.0:9000"
+	if got := c.AppURL(); got != "http://den.local:9000" {
+		t.Errorf("explicit address: %q", got)
+	}
+}

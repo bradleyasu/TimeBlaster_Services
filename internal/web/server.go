@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/bradsheets/timeblaster/internal/alarm"
@@ -164,8 +165,10 @@ type Deps struct {
 type Server struct {
 	cfg  config.Web
 	deps Deps
-	log  *slog.Logger
-	http *http.Server
+	// setupIP is the Timeblaster's address on its own setup network.
+	setupIP net.IP
+	log     *slog.Logger
+	http    *http.Server
 }
 
 // NewServer builds the server and its routes.
@@ -174,6 +177,9 @@ func NewServer(cfg config.Web, deps Deps) (*Server, error) {
 		return nil, errors.New("web: no logger supplied")
 	}
 	s := &Server{cfg: cfg, deps: deps, log: deps.Logger}
+	// "10.42.0.1/24" in configuration; the address alone here.
+	host, _, _ := strings.Cut(deps.Config.WiFi.SetupAddress, "/")
+	s.setupIP = net.ParseIP(host)
 
 	handler, err := s.routes()
 	if err != nil {
@@ -297,8 +303,31 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
+		// Reached over the Timeblaster's own setup network -- the NFC tag's
+		// address resolves there while it is in setup mode -- the app has
+		// nothing to offer: the Timeblaster is not on a network yet. The setup
+		// page is what the visitor needs. The API is left alone, because that
+		// page asks it whether setup is over.
+		if s.setupIP != nil && !strings.HasPrefix(r.URL.Path, "/api/") && localIP(r).Equal(s.setupIP) {
+			http.Redirect(rec, r, "http://"+s.setupIP.String()+"/", http.StatusFound)
+			return
+		}
 		next.ServeHTTP(rec, r)
 	})
+}
+
+// localIP is the address a request arrived on, which tells the setup network
+// from the home network.
+func localIP(r *http.Request) net.IP {
+	addr, ok := r.Context().Value(http.LocalAddrContextKey).(net.Addr)
+	if !ok {
+		return nil
+	}
+	host, _, err := net.SplitHostPort(addr.String())
+	if err != nil {
+		return nil
+	}
+	return net.ParseIP(host)
 }
 
 // Run serves until the context is cancelled, then shuts down gracefully.

@@ -18,7 +18,7 @@ This document is the design of record. It covers, in order:
 
 ```mermaid
 flowchart TB
-    phone["iPhone / browser<br/>http://timeblaster.local"]
+    phone["iPhone / browser<br/>http://timeblaster.local:8080"]
 
     subgraph pi["Raspberry Pi 5 — Raspberry Pi OS Lite (Debian 13 trixie)"]
         direction TB

@@ -63,7 +63,8 @@ scheduled locally, stored locally, and ring locally.
         │               setup mode comes back, and the page
         │               explains what went wrong
         ▼
- The Pi joins your LAN. Reach it at http://timeblaster.local
+ The Pi joins your LAN. The setup page notices and opens the
+ companion app, http://timeblaster.local:8080
 ```
 
 ### On the device
@@ -84,18 +85,39 @@ scheduled locally, stored locally, and ring locally.
 
 3. Open Wi-Fi settings and join **TIMEBLASTER-SETUP**.
 4. The setup page should open by itself. If it does not, browse to
-   **http://10.42.0.1**.
+   **http://10.42.0.1** -- or scan the NFC tag on the back of the Timeblaster
+   (see below).
 5. Pick your network from the list, or tick *Enter a hidden network name* and
    type it.
 6. Enter the password and tap **CONNECT**.
 
-The page will stop responding at that point — the access point has to come down
-before the radio can join your network. That is expected, and the page says so.
+The access point has to come down before the radio can join your network, so
+the page cannot hear the result directly. Instead it watches for it: your phone
+drops back to your own Wi-Fi by itself, and as soon as the Timeblaster appears
+there -- joined to the network you chose -- the page opens the companion app,
+where it offers to add itself to your home screen. If setup mode comes back
+instead, the page shows what went wrong so you can try again; if the Timeblaster
+fell back to its previous network, it says so and opens the app there.
 
-### Afterwards
+This only works when the page is open in a real browser tab. Phones often show
+a captive-portal page in a small "sign in to network" window instead, and that
+window closes as soon as the setup network does. Then, once back on your Wi-Fi,
+open **http://timeblaster.local:8080** yourself.
 
-7. Rejoin your normal Wi-Fi.
-8. Open **http://timeblaster.local**.
+### The NFC tag
+
+Write **http://timeblaster.local:8080** to the tag. It opens in a real browser
+tab, so the step above works, and the one address serves both cases:
+
+* **The Timeblaster is on your Wi-Fi:** the companion app opens, offering to
+  add itself to your home screen.
+* **The Timeblaster is in setup mode, and your phone is on TIMEBLASTER-SETUP:**
+  the address leads to the Timeblaster on its setup network, which hands over
+  to the setup page.
+
+What no address can do is reach a Timeblaster in setup mode while your phone is
+still on your home Wi-Fi: they are on different networks. Join
+TIMEBLASTER-SETUP first.
 
 Setup mode ends by itself after `wifi.setup_timeout` (default 15 minutes) if
 nothing happens, so a forgotten access point does not stay up.

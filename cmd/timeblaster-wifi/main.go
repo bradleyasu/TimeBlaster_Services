@@ -75,6 +75,7 @@ func run() error {
 		"setup_secured", cfg.WiFi.SetupPassphrase != "")
 
 	server := wifi.NewServer(cfg.WiFi, system.ExecRunner{}, system.RealClock{}, log)
+	server.SetAppURL(cfg.AppURL())
 	// Its own runner: a flash outlasts the cap every other command runs under.
 	server.EnableFirmwareFlashing(cfg.Firmware,
 		system.ExecRunner{Timeout: cfg.Firmware.FlashTimeout.Duration})

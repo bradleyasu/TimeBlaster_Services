@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -40,6 +41,10 @@ type Portal struct {
 	// anywhere else. Tests override it, because binding 80 needs root.
 	port string
 
+	// appURL is the companion app on the home network, where the page goes
+	// once the Timeblaster has joined it.
+	appURL string
+
 	mu   sync.Mutex
 	srv  *http.Server
 	done chan struct{}
@@ -47,7 +52,14 @@ type Portal struct {
 
 // NewPortal creates the portal.
 func NewPortal(cfg config.WiFi, ops portalOps, log *slog.Logger) *Portal {
-	return &Portal{cfg: cfg, ops: ops, log: log, port: "80"}
+	return &Portal{cfg: cfg, ops: ops, log: log, port: "80", appURL: config.Default().AppURL()}
+}
+
+// SetAppURL says where the companion app is on the home network.
+func (p *Portal) SetAppURL(u string) {
+	p.mu.Lock()
+	p.appURL = u
+	p.mu.Unlock()
 }
 
 // Start begins serving. It binds port 80 on the setup address so that a phone
@@ -81,7 +93,7 @@ func (p *Portal) Start(ctx context.Context) error {
 	addr := net.JoinHostPort(addressHost(p.cfg.SetupAddress), port)
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           securityHeaders(mux),
+		Handler:           securityHeaders(portalCSP(p.appURL), mux),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       20 * time.Second,
 		WriteTimeout:      2 * time.Minute, // a connection attempt is slow by nature
@@ -155,7 +167,7 @@ func (p *Portal) handleRoot(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	_, _ = w.Write([]byte(portalHTML(p.cfg.SetupSSID)))
+	_, _ = w.Write([]byte(portalHTML(p.cfg.SetupSSID, p.appURL)))
 }
 
 func (p *Portal) handleNetworks(w http.ResponseWriter, r *http.Request) {
@@ -209,16 +221,32 @@ func (p *Portal) handleConnect(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, status, result)
 }
 
-func securityHeaders(next http.Handler) http.Handler {
+func securityHeaders(csp string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		// The page is entirely self-contained; forbidding external resources means
 		// a phone with no internet access still renders it correctly.
-		w.Header().Set("Content-Security-Policy",
-			"default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; form-action 'none'")
+		w.Header().Set("Content-Security-Policy", csp)
 		next.ServeHTTP(w, r)
 	})
+}
+
+// portalCSP is the page's content policy. It may talk to itself and, after
+// the setup network has gone, to the app on the home network -- which is how
+// it learns the Timeblaster has joined it. Nothing else.
+func portalCSP(appURL string) string {
+	return "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; " +
+		"connect-src 'self' " + appOrigin(appURL) + "; form-action 'none'"
+}
+
+// appOrigin reduces a URL to its origin, for the policy.
+func appOrigin(appURL string) string {
+	u, err := url.Parse(appURL)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -235,7 +263,12 @@ func writeJSONError(w http.ResponseWriter, status int, msg string) {
 // portalHTML is the setup page. It is a single self-contained document with no
 // external resources, because a phone joined to the setup access point has no
 // route to the internet and would otherwise render an unstyled, scriptless page.
-func portalHTML(setupSSID string) string {
+func portalHTML(setupSSID, appURL string) string {
+	// Into the script as a JSON string, which escapes everything a script or
+	// an HTML parser could misread; into the text as escaped HTML.
+	appJS, _ := json.Marshal(appURL)
+	appHTML := html.EscapeString(appURL)
+	ssidJS, _ := json.Marshal(setupSSID)
 	return `<!doctype html>
 <html lang="en">
 <head>
@@ -302,9 +335,9 @@ func portalHTML(setupSSID string) string {
   </div>
 
   <p class="hint">
-    After a successful connection this access point disappears and the Timeblaster
-    rejoins your home network. Open <strong>http://timeblaster.local</strong> from a
-    device on that network to reach the companion app.
+    After you press Connect this setup network disappears and the Timeblaster joins
+    yours. Keep this page open: once your phone is back on your Wi-Fi it opens the
+    companion app by itself, at <strong>` + appHTML + `</strong>.
   </p>
 </div>
 <script>
@@ -348,34 +381,110 @@ func portalHTML(setupSSID string) string {
       });
   }
 
+  var APP = ` + string(appJS) + `;
+  var SETUP_SSID = ` + string(ssidJS) + `;
+
+  // What becomes of a connection attempt cannot be heard from here: the setup
+  // network goes down the moment the attempt starts, taking this page's
+  // connection with it. So watch for the outcome instead. The Timeblaster
+  // appearing on the home network, joined to the network asked for, means it
+  // worked and the app is a tap away -- so go there. This page coming back
+  // means setup mode came back, which means it did not.
+  // attempt identifies the newest connection attempt; a watcher for an older
+  // one stops at its next look.
+  var attempt = 0;
+
+  function failed(text) {
+    attempt++;
+    go.disabled = false;
+    show('err', text);
+    scan();
+  }
+
+  function watch(ssid) {
+    var mine = ++attempt;
+    var deadline = Date.now() + 3 * 60 * 1000;
+    show('busy', 'Joining "' + ssid + '"\u2026 This setup network is shutting down, and your ' +
+      'phone will go back to your own Wi-Fi by itself. Keep this page open: it opens the ' +
+      'Timeblaster app as soon as both are on your network.');
+
+    function again() { setTimeout(poll, 2000); }
+
+    function get(url) {
+      var ctl = window.AbortController ? new AbortController() : null;
+      var timer = setTimeout(function () { if (ctl) ctl.abort(); }, 3000);
+      return fetch(url, { cache: 'no-store', signal: ctl ? ctl.signal : undefined })
+        .then(function (r) { clearTimeout(timer); return r.json(); },
+              function (e) { clearTimeout(timer); throw e; });
+    }
+
+    function poll() {
+      if (mine !== attempt) return;
+      if (Date.now() > deadline) {
+        failed('The Timeblaster has not appeared on your network. If the password was ' +
+          'wrong it goes back to setup mode: rejoin "' + SETUP_SSID + '" and try again. ' +
+          'Otherwise open ' + APP + ' from your Wi-Fi.');
+        return;
+      }
+      // The app, on the home network. In setup mode it answers too -- on the
+      // setup network -- which is why its mode is checked, not just its answer.
+      get(APP + '/api/wifi/status').then(function (st) {
+        if (mine !== attempt) return;
+        if (st.mode === 'setup') {
+          // Reached over the setup network, which is up again: it failed.
+          failed((st.last_error || 'Could not join that network.') + ' Check the password and try again.');
+          return;
+        }
+        if (st.connected) {
+          if (st.ssid && st.ssid !== ssid) {
+            attempt++;
+            show('err', 'Could not join "' + ssid + '". The Timeblaster went back to "' +
+              st.ssid + '". Opening the app there\u2026');
+            setTimeout(function () { location.href = APP + '/'; }, 4000);
+            return;
+          }
+          show('ok', 'Connected to "' + ssid + '". Opening the Timeblaster app\u2026');
+          location.href = APP + '/';
+          return;
+        }
+        again();
+      }, function () {
+        // Not on the home network yet. This page's own server answering
+        // means the setup network is back: the attempt failed.
+        get('/api/status').then(function (st) {
+          if (mine !== attempt) return;
+          if (st.mode === 'setup') {
+            failed((st.last_error || 'Could not join that network.') + ' Check the password and try again.');
+            return;
+          }
+          again();
+        }, again);
+      });
+    }
+    // Give the setup network a moment to go before looking for the outcome.
+    setTimeout(poll, 4000);
+  }
+
   go.addEventListener('click', function () {
     var ssid = manual.checked ? manualInput.value.trim() : sel.value;
     if (!ssid) { show('err', 'Choose a network first.'); return; }
 
     go.disabled = true;
-    show('busy', 'Connecting to "' + ssid + '". This can take up to a minute; this page will stop responding once the setup network shuts down.');
+    watch(ssid);
 
+    // The answer usually never arrives -- the network it would arrive on is
+    // gone -- and when it does, the outcome is watched for all the same.
     fetch('/api/connect', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ssid: ssid, passphrase: psk.value, hidden: manual.checked })
-    })
-      .then(function (r) { return r.json(); })
-      .then(function (d) {
-        if (d.success) {
-          show('ok', 'Connected to ' + d.ssid + ' (' + (d.ipv4 || 'address pending') +
-            '). Rejoin your home Wi-Fi, then open http://timeblaster.local');
-        } else {
-          go.disabled = false;
-          show('err', (d.message || d.error || 'Connection failed.') +
-            (d.rolled_back ? ' The previous network was restored.' : ''));
-          scan();
-        }
-      })
-      .catch(function () {
-        show('ok', 'The setup network has shut down. If the Timeblaster joined your network, ' +
-          'open http://timeblaster.local from a device on it. Otherwise hold the Wi-Fi button for five seconds again.');
-      });
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      // Refused outright -- a password too short, say -- before the setup
+      // network was touched. Nothing to watch for.
+      if (d && d.success === false && !d.rolled_back) {
+        failed(d.message || d.error || 'Connection failed.');
+      }
+    }, function () {});
   });
 
   scan();

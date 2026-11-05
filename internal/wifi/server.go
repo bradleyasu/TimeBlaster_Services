@@ -56,6 +56,11 @@ func NewServer(cfg config.WiFi, runner system.CommandRunner, clock system.Clock,
 	return s
 }
 
+// SetAppURL says where the companion app is on the home network, for the
+// setup page to send people to once the Timeblaster has joined it. Call it
+// before Listen.
+func (s *Server) SetAppURL(u string) { s.portal.SetAppURL(u) }
+
 // Listen serves the helper RPC until the context is cancelled.
 func (s *Server) Listen(ctx context.Context) error {
 	if err := os.MkdirAll(filepath.Dir(s.cfg.HelperSocket), 0o755); err != nil {

@@ -17,6 +17,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -1104,6 +1105,21 @@ func validateMarks(name string, marks []int, in Input) error {
 }
 
 var usbIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{4}:[0-9a-fA-F]{4}$`)
+
+// AppURL is the companion app's address on the home network, as a phone
+// reaches it: the advertised hostname and the web port. The Wi-Fi setup page
+// sends people here once the Timeblaster has joined their network.
+func (c Config) AppURL() string {
+	port := "8080"
+	if _, p, err := net.SplitHostPort(c.Web.ListenAddress); err == nil && p != "" {
+		port = p
+	}
+	host := c.General.Hostname + ".local"
+	if port == "80" {
+		return "http://" + host
+	}
+	return "http://" + net.JoinHostPort(host, port)
+}
 
 // SoundPath resolves a sound identifier to a path inside the alarm sounds
 // directory, rejecting anything that would escape it. Sound ids come from the

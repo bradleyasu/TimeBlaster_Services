@@ -621,7 +621,7 @@ func newPortalHandler(ops portalOps) http.Handler {
 	mux.HandleFunc("/api/connect", p.handleConnect)
 	mux.HandleFunc("/api/status", p.handleStatus)
 	mux.HandleFunc("/generate_204", p.handleCaptiveProbe)
-	return securityHeaders(mux)
+	return securityHeaders(portalCSP(p.appURL), mux)
 }
 
 func TestPortalServesTheSetupPage(t *testing.T) {
