@@ -16,6 +16,7 @@ import (
 	"github.com/bradsheets/timeblaster/internal/protocol"
 	"github.com/bradsheets/timeblaster/internal/state"
 	"github.com/bradsheets/timeblaster/internal/storage"
+	"github.com/bradsheets/timeblaster/internal/wifi"
 )
 
 // This file holds every cross-subsystem policy decision in the device. It is
@@ -206,7 +207,15 @@ func (a *App) restartServices() {
 		<-a.clock.NewTimer(restartDelay).C()
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		if err := a.wifi.RestartServices(ctx); err != nil {
+		err := a.wifi.RestartServices(ctx)
+		switch {
+		case err == nil:
+		case errors.Is(err, wifi.ErrHelperUnavailable):
+			// The helper queues the restart and replies, but systemd can stop
+			// it a few milliseconds later, before the reply gets out. The
+			// connection dropping after the request is the restart under way.
+			a.log.Info("the helper went down as it took the restart request; the restart is under way")
+		default:
 			a.log.Error("could not restart the Timeblaster services", "error", err)
 			a.flashNanoText("Err", 3*time.Second)
 		}

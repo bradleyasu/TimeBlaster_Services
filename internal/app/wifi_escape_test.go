@@ -2,12 +2,15 @@ package app
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
 
 	"github.com/bradsheets/timeblaster/internal/input"
 	"github.com/bradsheets/timeblaster/internal/protocol"
+	"github.com/bradsheets/timeblaster/internal/wifi"
 )
 
 func holdWiFi(h *harness) {
@@ -191,4 +194,27 @@ func TestADoubleTapIsRefusedWhenARestartWouldDoHarm(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestTheHelperGoingDownMidRestartIsNotAnError(t *testing.T) {
+	// The helper queues the restart, then systemd stops it -- sometimes before
+	// its reply gets out. That dropped connection is the restart working.
+	h := newHarness(t, nil)
+	h.wifi.RestartErr = fmt.Errorf("%w: reading response: EOF", wifi.ErrHelperUnavailable)
+	tapWiFi(h)
+	tapWiFi(h)
+	passRestartDelay(t, h)
+	time.Sleep(20 * time.Millisecond)
+	if displayed(h, "Err") {
+		t.Error("a restart that went through was shown as an error")
+	}
+}
+
+func TestARestartTheHelperRefusesIsShown(t *testing.T) {
+	h := newHarness(t, nil)
+	h.wifi.RestartErr = errors.New("wifi: restarting the services: Access denied")
+	tapWiFi(h)
+	tapWiFi(h)
+	passRestartDelay(t, h)
+	waitFor(t, "Err on the display", func() bool { return displayed(h, "Err") })
 }

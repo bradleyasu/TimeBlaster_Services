@@ -36,6 +36,8 @@ type FakeManager struct {
 	// FlashErr makes only FlashNano fail. OnFlash, when set, runs during the
 	// flash, which is where a test plays the part of the restarting Nano.
 	FlashErr error
+	// RestartErr makes only RestartServices fail.
+	RestartErr error
 	OnFlash  func()
 }
 
@@ -88,6 +90,9 @@ func (f *FakeManager) RestartServices(context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "restart_services")
+	if f.RestartErr != nil {
+		return f.RestartErr
+	}
 	return f.Err
 }
 
