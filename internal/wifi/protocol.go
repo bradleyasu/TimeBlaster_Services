@@ -57,6 +57,9 @@ const (
 	// OpPowerOff it takes no arguments: the image and the device are fixed by
 	// the helper's configuration.
 	OpFlashNano Op = "flash_nano"
+	// OpRestartServices restarts the daemon and the helper. Like OpPowerOff it
+	// takes no arguments.
+	OpRestartServices Op = "restart_services"
 )
 
 // Request is one RPC call.
@@ -176,7 +179,7 @@ func (r Request) Validate() error {
 	}
 	switch r.Op {
 	case OpStatus, OpEnterSetup, OpExitSetup, OpScan, OpPing,
-		OpRemoteStatus, OpRemoteOn, OpRemoteOff, OpPowerOff, OpFlashNano:
+		OpRemoteStatus, OpRemoteOn, OpRemoteOff, OpPowerOff, OpFlashNano, OpRestartServices:
 		return nil
 	case OpConnect:
 		return ValidateCredentials(r.SSID, r.Passphrase)

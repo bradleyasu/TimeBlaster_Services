@@ -124,3 +124,71 @@ func TestTheWiFiIndicatorFollowsTheConnection(t *testing.T) {
 		return h.app.wifiOnline.Load()
 	})
 }
+
+func tapWiFi(h *harness) {
+	h.app.OnButton(input.ButtonEvent{Name: protocol.ButtonWiFi, Action: input.ActionShortPress})
+}
+
+func restarted(h *harness) bool { return slices.Contains(h.wifi.Calls(), "restart_services") }
+
+// passRestartDelay lets the rEStArt message be read, on the fake clock.
+func passRestartDelay(t *testing.T, h *harness) {
+	t.Helper()
+	waitFor(t, "the restart", func() bool {
+		h.clock.Advance(250 * time.Millisecond)
+		return restarted(h)
+	})
+}
+
+func TestDoubleTappingTheWiFiButtonRestartsTheServices(t *testing.T) {
+	h := newHarness(t, nil)
+	tapWiFi(h)
+	h.clock.Advance(300 * time.Millisecond)
+	tapWiFi(h)
+	waitFor(t, "rEStArt on the display", func() bool { return displayed(h, "rEStArt") })
+	passRestartDelay(t, h)
+}
+
+func TestASingleTapOrTwoSlowTapsDoNothing(t *testing.T) {
+	h := newHarness(t, nil)
+	tapWiFi(h)
+	h.clock.Advance(2 * time.Second)
+	tapWiFi(h) // too late to pair with the first
+	for range 10 {
+		h.clock.Advance(250 * time.Millisecond)
+		time.Sleep(2 * time.Millisecond)
+	}
+	if restarted(h) {
+		t.Error("two taps two seconds apart restarted the services")
+	}
+}
+
+func TestADoubleTapIsRefusedWhenARestartWouldDoHarm(t *testing.T) {
+	for name, setup := range map[string]func(t *testing.T, h *harness){
+		"an alarm is ringing": func(t *testing.T, h *harness) { ringAnAlarm(t, h) },
+		"Wi-Fi setup is active": func(t *testing.T, h *harness) {
+			holdWiFi(h)
+			waitFor(t, "setup", h.app.InSetupMode)
+		},
+		"a firmware update is running": func(t *testing.T, h *harness) {
+			h.app.fw.mu.Lock()
+			h.app.fw.updating = true
+			h.app.fw.mu.Unlock()
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t, nil)
+			setup(t, h)
+			tapWiFi(h)
+			tapWiFi(h)
+			waitFor(t, "no on the display", func() bool { return displayed(h, "no") })
+			for range 10 {
+				h.clock.Advance(250 * time.Millisecond)
+				time.Sleep(2 * time.Millisecond)
+			}
+			if restarted(h) {
+				t.Errorf("restarted while %s", name)
+			}
+		})
+	}
+}

@@ -215,6 +215,12 @@ func (s *Server) handle(ctx context.Context, req Request) Response {
 		}
 		return Response{OK: true}
 
+	case OpRestartServices:
+		if err := s.RestartServices(ctx); err != nil {
+			return errorResponse(err)
+		}
+		return Response{OK: true}
+
 	case OpFlashNano:
 		if err := s.FlashNano(ctx); err != nil {
 			return errorResponse(err)

@@ -140,6 +140,14 @@ The firmware debounces for 25 ms and reports edges. The Wi-Fi button's
 five-second hold is measured on the Pi, where its duration is configurable
 (`input.wifi_hold_duration`) and its behaviour is unit-tested.
 
+The Wi-Fi button does three things:
+
+| Gesture | Effect |
+| --- | --- |
+| Hold five seconds | Enter Wi-Fi setup mode. Held again during setup: cancel it and rejoin the saved network (`bAcK`). |
+| Tap twice within 0.7 s | Restart the Timeblaster's services -- the daemon (with the TV player, the Nano link and the app) and the Wi-Fi helper. The display shows `rEStArt`; everything is back within 10-20 seconds. Refused, showing `no`, while an alarm rings, during a firmware update, or during Wi-Fi setup. ErsatzTV is left running. |
+| Tap once | Nothing. |
+
 ### Shutting down with the big red button
 
 Hold the red button for ten seconds. Nothing shows for the first two, so an

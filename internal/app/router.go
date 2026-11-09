@@ -143,6 +143,76 @@ func (a *App) handleAlarmOffButton(ev input.ButtonEvent) {
 	}
 }
 
+// doubleTapWindow is how close together two taps of the Wi-Fi button must be
+// to count as a double tap. A single tap does nothing, so there is no waiting
+// to see whether a second follows.
+const doubleTapWindow = 700 * time.Millisecond
+
+// restartDelay leaves rEStArt on the display long enough to be read before
+// the daemon -- and with it the display's driver -- goes down.
+const restartDelay = 1500 * time.Millisecond
+
+// wifiTapped handles one short press of the Wi-Fi button: alone, nothing; the
+// second of two in quick succession, a restart of the Timeblaster's services.
+func (a *App) wifiTapped() {
+	now := a.clock.Now()
+	a.tapMu.Lock()
+	double := !a.lastWiFiTap.IsZero() && now.Sub(a.lastWiFiTap) <= doubleTapWindow
+	if double {
+		a.lastWiFiTap = time.Time{} // a third tap starts afresh
+	} else {
+		a.lastWiFiTap = now
+	}
+	a.tapMu.Unlock()
+
+	if !double {
+		a.log.Info("Wi-Fi button pressed briefly; hold it for five seconds to enter setup mode, " +
+			"or tap twice to restart the Timeblaster's services")
+		return
+	}
+	a.restartServices()
+}
+
+// restartServices restarts the daemon and the Wi-Fi helper, from the Wi-Fi
+// button's double tap: a way to recover from a stuck picture or a wedged
+// controller without the app or a terminal. Refused, with "no" on the
+// display, when a restart would do harm.
+func (a *App) restartServices() {
+	refuse := func(why string) {
+		a.log.Warn("Wi-Fi button double-tapped; not restarting", "reason", why)
+		a.flashNanoText("no", 2*time.Second)
+	}
+	switch {
+	case a.scheduler.IsRinging():
+		// A restart would silence it, and a missed alarm is not rung later.
+		refuse("an alarm is ringing")
+		return
+	case a.firmwareUpdating():
+		// Interrupting a flash could leave the Nano half-written.
+		refuse("a firmware update is running")
+		return
+	case a.inSetup.Load():
+		// Setup has its own way out: hold the button again.
+		refuse("Wi-Fi setup is active")
+		return
+	case a.wifi == nil:
+		refuse("there is no privileged helper to restart them")
+		return
+	}
+
+	a.log.Warn("Wi-Fi button double-tapped; restarting the Timeblaster services")
+	a.flashNanoText("rEStArt", 5*time.Second)
+	go func() {
+		<-a.clock.NewTimer(restartDelay).C()
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := a.wifi.RestartServices(ctx); err != nil {
+			a.log.Error("could not restart the Timeblaster services", "error", err)
+			a.flashNanoText("Err", 3*time.Second)
+		}
+	}()
+}
+
 // handleWiFiButton implements the Wi-Fi setup button.
 //
 // A five-second hold is the one and only way into Wi-Fi setup mode. A short
@@ -151,7 +221,7 @@ func (a *App) handleAlarmOffButton(ev input.ButtonEvent) {
 func (a *App) handleWiFiButton(ev input.ButtonEvent) {
 	if ev.Action != input.ActionHold {
 		if ev.Action == input.ActionShortPress {
-			a.log.Info("Wi-Fi button pressed briefly; hold it for five seconds to enter setup mode")
+			a.wifiTapped()
 		}
 		return
 	}

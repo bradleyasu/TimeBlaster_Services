@@ -83,6 +83,14 @@ func (f *FakeManager) PowerOff(ctx context.Context) error {
 	return f.Err
 }
 
+// RestartServices records the request. It restarts nothing.
+func (f *FakeManager) RestartServices(context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, "restart_services")
+	return f.Err
+}
+
 // FlashNano records the request and runs OnFlash.
 func (f *FakeManager) FlashNano(ctx context.Context) error {
 	f.mu.Lock()

@@ -83,6 +83,11 @@ type App struct {
 	// audioOutMu serialises switching the television's audio, which the app
 	// and the audio knob can both ask for at once.
 	audioOutMu sync.Mutex
+	// tapMu guards lastWiFiTap, the time of the Wi-Fi button's last short
+	// press, for spotting a double tap.
+	tapMu       sync.Mutex
+	lastWiFiTap time.Time
+
 	// inSetup is set while Wi-Fi setup mode is active, as announced.
 	inSetup atomic.Bool
 	// wifiOnline is whether the Timeblaster is on the home Wi-Fi, for the

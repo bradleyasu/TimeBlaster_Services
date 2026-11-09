@@ -27,6 +27,8 @@ type Manager interface {
 	SetRemoteAccess(ctx context.Context, on bool) (RemoteStatus, error)
 	// PowerOff shuts the system down.
 	PowerOff(ctx context.Context) error
+	// RestartServices restarts the daemon and the helper.
+	RestartServices(ctx context.Context) error
 	// FlashNano writes the shipped firmware to the Nano. ctx bounds it; a
 	// flash takes far longer than the helper's ordinary timeout.
 	FlashNano(ctx context.Context) error
@@ -162,6 +164,12 @@ func (c *Client) PowerOff(ctx context.Context) error {
 // and a flash takes longer.
 func (c *Client) FlashNano(ctx context.Context) error {
 	_, err := c.callWithin(ctx, Request{Op: OpFlashNano}, 0)
+	return err
+}
+
+// RestartServices asks the helper to restart the daemon and itself.
+func (c *Client) RestartServices(ctx context.Context) error {
+	_, err := c.call(ctx, Request{Op: OpRestartServices})
 	return err
 }
 

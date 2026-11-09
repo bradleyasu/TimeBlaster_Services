@@ -22,3 +22,18 @@ func (s *Server) PowerOff(ctx context.Context) error {
 	}
 	return nil
 }
+
+// RestartServices restarts the Timeblaster daemon and this helper.
+//
+// Like PowerOff, the request carries no fields: the units are fixed here, so
+// nothing the daemon sends can name anything else. --no-block queues the
+// restart and returns at once, so the reply reaches the daemon before systemd
+// stops either service -- including this one.
+func (s *Server) RestartServices(ctx context.Context) error {
+	s.log.Warn("restarting the Timeblaster services at the daemon's request")
+	if _, err := s.runner.Run(ctx, "systemctl", "--no-block", "restart",
+		"timeblaster.service", "timeblaster-wifi.service"); err != nil {
+		return fmt.Errorf("wifi: restarting the services: %w", err)
+	}
+	return nil
+}

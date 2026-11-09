@@ -45,3 +45,22 @@ func TestPowerOffIsAValidOperation(t *testing.T) {
 		t.Errorf("the helper would reject its own power-off: %v", err)
 	}
 }
+
+func TestRestartServicesRunsExactlyOneFixedCommand(t *testing.T) {
+	// Root, restarting services. The request has no fields, so the units are
+	// fixed here: nothing the daemon sends can name another.
+	runner := system.NewFakeRunner()
+	s := NewServer(config.Default().WiFi, runner, system.NewFakeClock(time.Now()), testLogger())
+	resp := s.handle(context.Background(), Request{Version: ProtocolVersion, Op: OpRestartServices})
+	if !resp.OK {
+		t.Fatalf("refused: %+v", resp)
+	}
+	calls := runner.Calls()
+	want := []string{"--no-block", "restart", "timeblaster.service", "timeblaster-wifi.service"}
+	if len(calls) != 1 || calls[0].Name != "systemctl" || !slices.Equal(calls[0].Args, want) {
+		t.Errorf("ran %v, want systemctl %v", calls, want)
+	}
+	if err := (Request{Version: ProtocolVersion, Op: OpRestartServices}).Validate(); err != nil {
+		t.Errorf("the helper would reject its own restart: %v", err)
+	}
+}
