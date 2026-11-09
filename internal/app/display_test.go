@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"github.com/bradsheets/timeblaster/internal/alarm"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -461,5 +463,30 @@ func TestAlarmPointUpdatesWhenTheScheduleChanges(t *testing.T) {
 	h.app.ScheduleChanged(nil)
 	if got, pushed := lastAlarmPending(h); !pushed || got {
 		t.Errorf("clearing the schedule did not put the point out (pushed=%v, on=%v)", pushed, got)
+	}
+}
+
+func TestASoundCopiedInSinceTheLastScanCanBeTheDefault(t *testing.T) {
+	// Copied onto the Timeblaster a minute ago, before the periodic rescan has
+	// seen it: choosing it must scan again rather than call it missing.
+	h := newHarness(t, nil)
+	body := append([]byte("ID3\x03\x00\x00\x00\x00\x00\x00"), make([]byte, 2048)...)
+	if err := os.WriteFile(filepath.Join(h.app.cfg.Storage.AlarmSoundsDir, "klaxon.mp3"), body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cur := h.app.Settings()
+	cur.DefaultSoundID = "klaxon"
+	got, err := h.app.UpdateSettings(context.Background(), cur)
+	if err != nil {
+		t.Fatalf("a sound that is on disk was refused: %v", err)
+	}
+	if got.DefaultSoundID != "klaxon" {
+		t.Errorf("default is %q", got.DefaultSoundID)
+	}
+
+	// A sound that truly is not there is still refused.
+	cur.DefaultSoundID = "nope"
+	if _, err := h.app.UpdateSettings(context.Background(), cur); err == nil {
+		t.Error("a missing sound was accepted as the default")
 	}
 }

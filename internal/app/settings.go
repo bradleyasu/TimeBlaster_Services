@@ -211,12 +211,16 @@ func (a *App) UpdateSettings(ctx context.Context, s web.Settings) (web.Settings,
 		// Validate before storing: an alarm pointing at a missing sound would
 		// fall back at ring time, which is far too late to tell the user.
 		if s.DefaultSoundID != "" {
-			sound, err := a.library.Get(s.DefaultSoundID)
+			// A sound copied in since the last periodic scan is not known
+			// yet: scan again before calling it missing.
+			_, err := a.library.Get(s.DefaultSoundID)
+			if err != nil {
+				if rerr := a.library.Refresh(); rerr == nil {
+					_, err = a.library.Get(s.DefaultSoundID)
+				}
+			}
 			if err != nil {
 				return web.Settings{}, fmt.Errorf("app: sound %q is not available", s.DefaultSoundID)
-			}
-			if err := a.library.Refresh(); err == nil {
-				_ = sound // re-read after the refresh below
 			}
 		}
 		if err := a.store.SetSetting(storage.KeyDefaultSoundID, s.DefaultSoundID); err != nil {
