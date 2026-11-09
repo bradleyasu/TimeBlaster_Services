@@ -38,7 +38,7 @@ type FakeManager struct {
 	FlashErr error
 	// RestartErr makes only RestartServices fail.
 	RestartErr error
-	OnFlash  func()
+	OnFlash    func()
 }
 
 // RemoteStatus reports the fake's remote access state.
