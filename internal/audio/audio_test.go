@@ -798,3 +798,78 @@ func waitForClockWaiters(t *testing.T, clk *system.FakeClock, n int) {
 	}
 	t.Fatalf("timed out waiting for %d clock waiter(s), got %d", n, clk.Waiters())
 }
+
+func amixerSets(f *serviceFixture) []string {
+	var out []string
+	for _, c := range f.runner.Calls() {
+		if c.Name == "amixer" && strings.Contains(c.String(), " sset ") {
+			out = append(out, c.String())
+		}
+	}
+	return out
+}
+
+func TestTheKnobSetsAlarmLoudnessOnceAndLive(t *testing.T) {
+	// The bug: the knob's value went to the speaker's mixer AND to the
+	// player, so 50% played at about a quarter, and the player's half froze
+	// when the alarm started -- turning the knob to 100 mid-alarm could not
+	// reach full volume. With a mixer, the player runs at full volume and the
+	// mixer alone follows the knob.
+	f := newServiceFixture(t, nil)
+	ctx := context.Background()
+	if err := f.svc.ResolveDevice(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.SetAlarmVolume(ctx, 50, true); err != nil {
+		t.Fatal(err)
+	}
+	f.runner.Reset()
+
+	if err := f.svc.PlayAlarm(ctx, "alarm1"); err != nil {
+		t.Fatal(err)
+	}
+	play, _ := f.player.LastPlay()
+	if play.Opts.VolumePercent != 100 {
+		t.Errorf("the player ran at %d%%: the knob's value applied twice", play.Opts.VolumePercent)
+	}
+	// Set afresh as it starts: a replugged speaker may have forgotten.
+	if sets := amixerSets(f); len(sets) == 0 || !strings.HasSuffix(sets[len(sets)-1], "PCM 50%") {
+		t.Errorf("the mixer was not set to the knob as the alarm started: %v", sets)
+	}
+
+	// Turned up mid-alarm: the mixer follows, and that is all it takes.
+	if err := f.svc.SetAlarmVolume(ctx, 100, true); err != nil {
+		t.Fatal(err)
+	}
+	if sets := amixerSets(f); !strings.HasSuffix(sets[len(sets)-1], "PCM 100%") {
+		t.Errorf("the mixer did not follow the knob: %v", sets)
+	}
+	if v := f.player.LastHandle().Volume(); v != 0 && v != 100 {
+		t.Errorf("the player's own volume was changed to %d; the mixer alone should move", v)
+	}
+}
+
+func TestWithoutAMixerThePlayerFollowsTheKnob(t *testing.T) {
+	f := newServiceFixture(t, nil)
+	f.runner.Outputs["amixer"] = []byte("") // a speaker with no hardware volume control
+	ctx := context.Background()
+	if err := f.svc.ResolveDevice(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.SetAlarmVolume(ctx, 40, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.PlayAlarm(ctx, "alarm1"); err != nil {
+		t.Fatal(err)
+	}
+	play, _ := f.player.LastPlay()
+	if play.Opts.VolumePercent != 40 {
+		t.Errorf("with no mixer the player must carry the knob's value: %d", play.Opts.VolumePercent)
+	}
+	if err := f.svc.SetAlarmVolume(ctx, 90, true); err != nil {
+		t.Fatal(err)
+	}
+	if v := f.player.LastHandle().Volume(); v != 90 {
+		t.Errorf("turning the knob mid-alarm did not reach the player: %d", v)
+	}
+}

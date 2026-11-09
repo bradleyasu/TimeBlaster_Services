@@ -228,10 +228,35 @@ func (s *AlarmService) play(ctx context.Context, soundID string, isAlarm bool, l
 		}
 	}
 
+	// The knob sets the loudness, live, through exactly one control.
+	//
+	// With a hardware mixer that control is the mixer: it follows the knob
+	// for as long as the sound plays, so the player itself runs at full
+	// volume. Giving the player the knob's value as well applied it twice --
+	// a knob at 50% played at about a quarter -- and froze the player's half
+	// at the moment the alarm started, so turning the knob up mid-alarm could
+	// never reach full volume. The mixer is also set afresh here, so the alarm
+	// rings at whatever the knob says now, even if a replugged speaker has
+	// forgotten its level since.
+	//
+	// Without a mixer the player's volume is the control, and knob movements
+	// reach it through the playing handle.
+	s.mu.Lock()
+	control := s.mixerControl
+	s.mu.Unlock()
+	playerVol := vol
+	if control != "" {
+		playerVol = 100
+		if err := s.applyHardwareVolume(ctx, vol); err != nil {
+			s.log.Warn("could not set the speaker volume as the alarm started; "+
+				"it plays at the speaker's current level", "percent", vol, "error", err)
+		}
+	}
+
 	handle, err := s.player.Play(ctx, sound.Path, PlayOptions{
 		Device:        device,
 		Loop:          isAlarm,
-		VolumePercent: vol,
+		VolumePercent: playerVol,
 		ExtraArgs:     s.cfg.ExtraPlayerArgs,
 	})
 	if err != nil {
@@ -253,7 +278,8 @@ func (s *AlarmService) play(ctx context.Context, soundID string, isAlarm bool, l
 		kind = "alarm"
 	}
 	s.log.Info("alarm audio started",
-		"kind", kind, "sound", sound.ID, "device", orAuto(device), "volume", vol, "loop", isAlarm)
+		"kind", kind, "sound", sound.ID, "device", orAuto(device), "volume", vol,
+		"via", volumePath(control), "loop", isAlarm)
 
 	go s.watch(handle, sound.ID, isAlarm, limit)
 	return nil
