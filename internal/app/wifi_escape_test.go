@@ -168,7 +168,14 @@ func TestASingleTapOrTwoSlowTapsDoNothing(t *testing.T) {
 
 func TestADoubleTapIsRefusedWhenARestartWouldDoHarm(t *testing.T) {
 	for name, setup := range map[string]func(t *testing.T, h *harness){
-		"an alarm is ringing": func(t *testing.T, h *harness) { ringAnAlarm(t, h) },
+		// While it rings, a tap snoozes instead; once snoozed, the alarm is
+		// still waiting and a restart would lose it.
+		"an alarm is snoozed": func(t *testing.T, h *harness) {
+			ringAnAlarm(t, h)
+			if err := h.app.scheduler.Snooze(); err != nil {
+				t.Fatal(err)
+			}
+		},
 		"Wi-Fi setup is active": func(t *testing.T, h *harness) {
 			holdWiFi(h)
 			waitFor(t, "setup", h.app.InSetupMode)
@@ -217,4 +224,50 @@ func TestARestartTheHelperRefusesIsShown(t *testing.T) {
 	tapWiFi(h)
 	passRestartDelay(t, h)
 	waitFor(t, "Err on the display", func() bool { return displayed(h, "Err") })
+}
+
+func alarmState(h *harness) string {
+	if a := h.app.scheduler.Active(); a != nil {
+		return string(a.State)
+	}
+	return ""
+}
+
+func TestTappingTheWiFiButtonSnoozesARingingAlarm(t *testing.T) {
+	h := newHarness(t, nil)
+	ringAnAlarm(t, h)
+	tapWiFi(h)
+	waitFor(t, "snoozed", func() bool { return alarmState(h) == "snoozed" })
+	waitFor(t, "SnooZE on the display", func() bool { return displayed(h, "SnooZE") })
+}
+
+func TestASleepySecondTapAfterSnoozingDoesNotRestart(t *testing.T) {
+	// Tap to snooze, tap again a moment later: that must not count as a
+	// double tap, and nothing may restart while the alarm waits to ring again.
+	h := newHarness(t, nil)
+	ringAnAlarm(t, h)
+	tapWiFi(h)
+	waitFor(t, "snoozed", func() bool { return alarmState(h) == "snoozed" })
+	h.clock.Advance(200 * time.Millisecond)
+	tapWiFi(h)
+	tapWiFi(h) // and a deliberate double tap, while snoozed
+	for range 10 {
+		h.clock.Advance(250 * time.Millisecond)
+		time.Sleep(2 * time.Millisecond)
+	}
+	if restarted(h) {
+		t.Error("restarted with a snoozed alarm waiting")
+	}
+	if alarmState(h) != "snoozed" {
+		t.Errorf("the snoozed alarm is now %q", alarmState(h))
+	}
+}
+
+func TestTappingTheWiFiButtonWithNoAlarmStillDoesNothing(t *testing.T) {
+	h := newHarness(t, nil)
+	tapWiFi(h)
+	time.Sleep(20 * time.Millisecond)
+	if displayed(h, "SnooZE") || restarted(h) {
+		t.Error("a lone tap with no alarm did something")
+	}
 }

@@ -153,10 +153,29 @@ const doubleTapWindow = 700 * time.Millisecond
 // the daemon -- and with it the display's driver -- goes down.
 const restartDelay = 1500 * time.Millisecond
 
-// wifiTapped handles one short press of the Wi-Fi button: alone, nothing; the
-// second of two in quick succession, a restart of the Timeblaster's services.
+// wifiTapped handles one short press of the Wi-Fi button. While an alarm
+// rings, it snoozes it. Otherwise alone it does nothing, and the second of two
+// in quick succession restarts the Timeblaster's services.
 func (a *App) wifiTapped() {
 	now := a.clock.Now()
+
+	// The snooze button, while an alarm rings. The big red button stays
+	// "off": the two never overlap, so a half-asleep slap of either does
+	// exactly one thing.
+	if a.scheduler.IsRinging() {
+		a.tapMu.Lock()
+		a.lastWiFiTap = time.Time{} // a snoozing tap is never half of a double tap
+		a.tapMu.Unlock()
+		a.log.Info("Wi-Fi button tapped during the alarm; snoozing")
+		if err := a.scheduler.Snooze(); err != nil && !errors.Is(err, alarm.ErrNotRinging) &&
+			!errors.Is(err, alarm.ErrNoneActive) {
+			a.log.Error("could not snooze the alarm from the button", "error", err)
+			return
+		}
+		a.flashNanoText("SnooZE", 3*time.Second)
+		return
+	}
+
 	a.tapMu.Lock()
 	double := !a.lastWiFiTap.IsZero() && now.Sub(a.lastWiFiTap) <= doubleTapWindow
 	if double {
@@ -184,9 +203,11 @@ func (a *App) restartServices() {
 		a.flashNanoText("no", 2*time.Second)
 	}
 	switch {
-	case a.scheduler.IsRinging():
-		// A restart would silence it, and a missed alarm is not rung later.
-		refuse("an alarm is ringing")
+	case a.scheduler.Active() != nil:
+		// Ringing or snoozed: a restart would lose it, and a missed alarm is
+		// not rung later. Snoozed counts too, because the tap that snoozes is
+		// often followed by a sleepy second one.
+		refuse("an alarm is active")
 		return
 	case a.firmwareUpdating():
 		// Interrupting a flash could leave the Nano half-written.
