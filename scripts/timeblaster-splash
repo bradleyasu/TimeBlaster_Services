@@ -17,6 +17,13 @@ Usage:
     timeblaster-splash --check         report what it would do, paint nothing
     timeblaster-splash --clear         paint a plain dark screen
     timeblaster-splash --text "..."    override the message
+    timeblaster-splash --shutdown      the shutting-down (or restarting) screen
+
+--shutdown exists because the boot screen outlives the boot. Nothing repaints
+the framebuffer after this script, so when mpv lets go of the display at
+shutdown, the boot screen is what reappears -- "BOOTING" on the way down.
+timeblaster-shutdown-screen.service runs this just before the Timeblaster
+stops, while mpv still covers the framebuffer, so the switch is invisible.
 """
 
 import argparse
@@ -36,6 +43,29 @@ except ImportError as exc:  # pragma: no cover - only hit on a broken install
 
 DEFAULT_HEADLINE = "TIMEBLASTER"
 DEFAULT_MESSAGE = "BOOTING, PLEASE STAND BY..."
+SHUTDOWN_MESSAGE = "SHUTTING DOWN..."
+RESTART_MESSAGE = "RESTARTING, PLEASE STAND BY..."
+
+
+def shutdown_message(jobs=None):
+    """Say whether the system is going down for good or coming back.
+
+    systemd queues reboot.target for a reboot and poweroff.target (or
+    halt.target) for a shutdown; which one is waiting decides the words. If the
+    queue cannot be read, it says shutting down: the screen is about to go dark
+    either way, and a reboot repaints the boot screen moments later.
+    """
+    if jobs is None:
+        import subprocess
+        try:
+            jobs = subprocess.run(["systemctl", "list-jobs", "--no-legend", "--plain"],
+                                  capture_output=True, text=True, timeout=3).stdout
+        except (OSError, subprocess.SubprocessError):
+            jobs = ""
+    for line in jobs.splitlines():
+        if "reboot.target" in line.split():
+            return RESTART_MESSAGE
+    return SHUTDOWN_MESSAGE
 
 # linux/vt.h
 VT_ACTIVATE = 0x5606
@@ -101,8 +131,15 @@ def main():
     ap.add_argument("--headline", default=DEFAULT_HEADLINE)
     ap.add_argument("--text", default=DEFAULT_MESSAGE, help="message under the headline")
     ap.add_argument("--clear", action="store_true", help="paint a plain dark screen")
+    ap.add_argument("--shutdown", action="store_true",
+                    help="paint the shutting-down or restarting screen, and leave the VT alone")
     ap.add_argument("--check", action="store_true", help="report what would happen, paint nothing")
     args = ap.parse_args()
+    if args.shutdown:
+        args.text = shutdown_message()
+        # mpv holds the display on the current VT. Switching VTs under it would
+        # flash the console; painting the framebuffer behind it is invisible.
+        args.vt = 0
 
     geometry = framebuffer_geometry(args.device)
     if geometry is None:

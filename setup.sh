@@ -884,22 +884,30 @@ install_splash() {
   run install -m 0755 -o root -g root "${SCRIPT_DIR}/scripts/timeblaster-splash" "${BIN_DIR}/timeblaster-splash"
   ok "installed the boot screen to ${BIN_DIR}/timeblaster-splash"
 
-  local src="${SCRIPT_DIR}/deploy/systemd/timeblaster-splash.service"
-  local dst="${SYSTEMD_DIR}/timeblaster-splash.service"
-  if [[ -f "$dst" ]] && cmp -s "$src" "$dst"; then
-    skip "timeblaster-splash.service is already current"
-  else
-    run install -m 0644 -o root -g root "$src" "$dst"
-    run systemctl daemon-reload
-    ok "installed timeblaster-splash.service"
-  fi
+  # The boot screen, and its counterpart that repaints the framebuffer as the
+  # system goes down -- without which the boot screen reappears at shutdown.
+  local unit src dst
+  for unit in timeblaster-splash.service timeblaster-shutdown-screen.service; do
+    src="${SCRIPT_DIR}/deploy/systemd/${unit}"
+    dst="${SYSTEMD_DIR}/${unit}"
+    if [[ -f "$dst" ]] && cmp -s "$src" "$dst"; then
+      skip "${unit} is already current"
+    else
+      run install -m 0644 -o root -g root "$src" "$dst"
+      run systemctl daemon-reload
+      ok "installed ${unit}"
+    fi
 
-  if systemctl is-enabled timeblaster-splash.service >/dev/null 2>&1; then
-    skip "timeblaster-splash.service is already enabled"
-  else
-    run systemctl enable timeblaster-splash.service
-    ok "enabled the boot screen"
-  fi
+    if systemctl is-enabled "$unit" >/dev/null 2>&1; then
+      skip "${unit} is already enabled"
+    else
+      run systemctl enable "$unit"
+      ok "enabled ${unit}"
+    fi
+  done
+  # Started now, so this boot is covered too: starting it does nothing but
+  # arm the stop.
+  run systemctl start timeblaster-shutdown-screen.service
 
   # Report whether it can actually paint, since a missing framebuffer is the
   # one thing that silently turns this into a black screen.

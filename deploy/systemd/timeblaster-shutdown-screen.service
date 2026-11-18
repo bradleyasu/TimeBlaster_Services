@@ -1,0 +1,47 @@
+# Paints the Timeblaster's shutting-down screen as the system goes down.
+#
+# The boot screen is painted onto the framebuffer once, at boot, and nothing
+# repaints it: mpv covers it while the Timeblaster runs. When mpv lets go of
+# the display at shutdown, the framebuffer is revealed -- still saying
+# "BOOTING". So this unit paints over it first.
+#
+# It does nothing when started. Its work is in ExecStop, and the ordering is the
+# point: units stop in the reverse of their start order, so a unit started
+# after timeblaster.service is stopped before it. The framebuffer is repainted
+# while mpv still covers it -- invisibly -- and the shutting-down screen is what
+# appears when the Timeblaster stops a moment later.
+#
+# Restarting the daemon alone (a deploy, or the Wi-Fi button's double tap) does
+# not touch this unit, so those brief restarts still show the boot screen,
+# which is what they are.
+[Unit]
+Description=Timeblaster shutdown screen
+Documentation=file:/usr/share/doc/timeblaster/hardware.md
+After=timeblaster-splash.service timeblaster.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/true
+ExecStop=/usr/local/bin/timeblaster-splash --shutdown
+# Cosmetic: it must never hold up or fail a shutdown.
+TimeoutStopSec=10
+SuccessExitStatus=0 1
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=timeblaster-shutdown-screen
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+PrivateNetwork=yes
+# AF_UNIX for systemctl, which asks systemd whether this is a reboot.
+RestrictAddressFamilies=AF_UNIX
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryMax=64M
+
+[Install]
+WantedBy=multi-user.target
